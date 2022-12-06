@@ -182,7 +182,7 @@ static void S_ser_write_to_disk(
     graph_type * const graph) {
   static int gID = 1;
 
-  size_t size_before = graph_size(graph);
+  // size_t size_before = graph_size(graph);
 
   vtx_type *nvtxs, *nedges, ncon;
   tid_type nthreads = ctrl->nthreads;
@@ -201,7 +201,7 @@ static void S_ser_write_to_disk(
   sprintf(outfile, "dump_mtmetis.%d", graph->gID);
 
   if ((fpout = fopen(outfile, "wb")) == NULL)
-    return;
+    abort();
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
@@ -210,40 +210,43 @@ static void S_ser_write_to_disk(
   if (graph->free_xadj) {
     for (int myid = 0; myid < nthreads; ++myid) {
       if (fwrite(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpout) != (size_t)(nvtxs[myid]+1))
-        assert(0);
+        abort();
         // goto ERROR;
       dl_free(graph->xadj[myid]);
+      graph->xadj[myid] = NULL;
     }
-    dl_free(graph->xadj);
-    graph->xadj = NULL;
+    // dl_free(graph->xadj);
+    // graph->xadj = NULL;
   }
   if (graph->free_vwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
       if (fwrite(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpout) != (size_t)(nvtxs[myid]*ncon))
-        assert(0);
+        abort();
       dl_free(graph->vwgt[myid]);
+      graph->vwgt[myid] = NULL;
     }
-    dl_free(graph->vwgt);
-    graph->vwgt = NULL;
+    // dl_free(graph->vwgt);
+    // graph->vwgt = NULL;
   }
   if (graph->free_adjncy) {
     for (int myid = 0; myid < nthreads; ++myid) {
       if (fwrite(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpout) != (size_t)nedges[myid])
-        assert(0);
+        abort();
       dl_free(graph->adjncy[myid]);
+      graph->adjncy[myid] = NULL;
     }
-    dl_free(graph->adjncy);
-    graph->adjncy = NULL;
+    // dl_free(graph->adjncy);
+    // graph->adjncy = NULL;
   }
   if (graph->free_adjwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
-      if (fwrite(graph->adjwgt, sizeof(wgt_type), nedges[myid], fpout) != (size_t)nedges[myid])
-        assert(0);
+      if (fwrite(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpout) != (size_t)nedges[myid])
+        abort();
       dl_free(graph->adjwgt[myid]);
       graph->adjwgt[myid] = NULL;
     }
-    dl_free(graph->adjwgt);
-    graph->adjwgt = NULL;
+    // dl_free(graph->adjwgt);
+    // graph->adjwgt = NULL;
   }
 
   fclose(fpout);
@@ -263,9 +266,9 @@ static void S_ser_write_to_disk(
 
   graph->ondisk = 1;
 
-  size_t size_after = graph_size(graph);
+  // size_t size_after = graph_size(graph);
 
-  printf("%d -> %d\n", (int)(size_before >> 20), (int)(size_after >> 20));
+  // printf("%d -> %d\n", (int)(size_before >> 20), (int)(size_after >> 20));
 
   return;
 
@@ -284,7 +287,7 @@ static void S_ser_read_from_disk(
   char infile[1024];
   FILE *fpin;
 
-  if (ctrl->ondisk == 0)
+  if (ctrl->ondisk == 0 || !graph->ondisk)
     return;
 
   sprintf(infile, "dump_mtmetis.%d", graph->gID);
@@ -297,36 +300,32 @@ static void S_ser_read_from_disk(
   ncon   = 1;  // only 1 type of constraint is supported
 
   if (graph->free_xadj) {
-    graph->xadj = r_adj_alloc(nthreads);
     for (int myid = 0; myid < nthreads; ++myid) {
-      // graph->xadj[myid] = adj_init_alloc(0, nvtxs[myid]+1);
       graph->xadj[myid] = adj_alloc(nvtxs[myid]+1);
       if (fread(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpin) != (size_t)(nvtxs[myid]+1))
-        assert(0);
+        abort();
+      graph->xadj[myid][0] = 0;
     }
   }
   if (graph->free_vwgt) {
-    graph->vwgt = r_wgt_alloc(nthreads);
     for (int myid = 0; myid < nthreads; ++myid) {
       graph->vwgt[myid] = wgt_alloc(nvtxs[myid]*ncon);
-      if (fwrite(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpin) != (size_t)(nvtxs[myid]*ncon))
-        assert(0);
+      if (fread(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpin) != (size_t)(nvtxs[myid]*ncon))
+        abort();
     }
   }
   if (graph->free_adjncy) {
-    graph->adjncy = r_vtx_alloc(nthreads);
     for (int myid = 0; myid < nthreads; ++myid) {
       graph->adjncy[myid] = vtx_alloc(nedges[myid]);
-      if (fwrite(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
-        assert(0);
+      if (fread(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
+        abort();
     }
   }
   if (graph->free_adjwgt) {
-    graph->adjwgt = r_wgt_alloc(nthreads);
     for (int myid = 0; myid < nthreads; ++myid) {
       graph->adjwgt[myid] = wgt_alloc(nedges[myid]);
-      if (fwrite(graph->adjwgt, sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
-        assert(0);
+      if (fread(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
+        abort();
     }
   }
 
@@ -356,7 +355,7 @@ static void test_func(
     ctrl_type * const ctrl,
     graph_type * const graph) {
   int myid = dlthread_get_id(ctrl->comm);
-  printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", graph_size(graph) >> 20, graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
+  printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", (int)(graph_size(graph) >> 20), graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
 }
 
 static wgt_type S_par_partition_mlevel(
