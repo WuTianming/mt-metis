@@ -1,0 +1,34 @@
+sudo: required
+services:
+  - docker
+dist: trusty
+language: cpp
+compiler:
+  - clang
+  - gcc
+script:
+  - "./configure --debug --devel --test && make && make test"
+  - "./configure --test && make && make test"
+  - "./configure --test --index-type=int64_t --dimension-type=uint64_t && make && make test"
+  - "./configure --test --index-type=uint64_t --dimension-type=uint32_t && make && make test"
+  - "./configure --test --index-type=uint32_t --dimension-type=int32_t && make && make test"
+  - "./configure --test --value-type=float && make && make test"
+  - "./configure --test --value-type=int64_t && make && make test"
+before_deploy:
+  - sudo apt-get update -qy
+  - sudo apt-get install -qy python3 python3-pip
+  - python3 -m pip install packagecore
+  - packagecore -o dist "${TRAVIS_TAG#v}"
+deploy:
+  provider: releases
+  api_key:
+    secure: Ua6whAx/VtByXWjQgywD1py1AH9xB7H+wutpMJSrhZjUfJJrcLwsGzb1gInU9xEVNPfp2MR0Lre3KaH70gEyf74QyWoa3vD/fuRZmsQQ1RT8wtSrw1dA9wy+KGtRmeTmcYBD65KKuf+1zo5SS8ftkwSv+k2RoOCbDNJTGlIpFqYvjc3Rg0lXu4WE+y8ySGuwgfXzd/dhOdE0mVgFDXQwpnP6/zvwDKwGbfIUydyHhh4sdmfCmsLOiQSNHxRWUYLxdcNfFw8iXWmtcqyf3cIYJh0HmLZca3q5RobfO/GB2fLvaKDVQPyQcLZOyImbSLDHWQXCz7z4uWiR45rnOsH+wgM5xenQC6v9crCKQGPt3/BbraaVrekCjiTryZoy8dwbn5WCQTbu1dp4FtWQB8gXwuSYhIKniDOC/O60IgOn/cECsTckqaBfhrJ288hv8XLCaZYP/kRvqUSd79/6YhFwR08PQdoCk7mYLZqgajHYBQBb8pBAuvRPjkE69a6uT3eNhXPQsEM5MohKVaHcK2L14VNGOIDSMMqpW5zrCPvN4mnQIySH4/PepI12bWolOgH7as1i0nQXvqznQexyCORmygBIDZAQYYmw84jh/BAhJ39ZAumGyUVmYIe7udAZXlvg8CQewBD1cC2FtnFkVBVXibs70LzykO6Bxk1LRM0JNc8=
+  file_glob: true
+  file:
+    - wildriver_*.deb
+    - wildriver-*.pkg.tar.xz
+    - wildriver-*.rpm
+  skip_cleanup: true
+  on:
+    tags: true
+    repo: dlasalle/wildriver

@@ -1,0 +1,29 @@
+name: wildriver 
+metadata:
+  maintainer: dominique@solidlake.com
+  license: MIT 
+  summary: IO library for sparse matrices and graphs.
+  homepage: https://github.com/dlasalle/wildriver
+commands:
+  compile:
+    - ./configure --prefix=/usr
+    - make
+  install:
+    - make install DESTDIR="${BP_DESTDIR}"
+packages:
+  archlinux:
+    builddeps:
+      - cmake 
+      - gcc
+  fedora25:
+    builddeps:
+      - cmake 
+      - gcc-c++
+  centos7.3:
+    builddeps:
+      - cmake 
+      - gcc-c++
+  ubuntu17.10:
+    builddeps:
+      - cmake 
+      - g++
