@@ -73,6 +73,7 @@ typedef struct ctrl_type {
   int ctype;
   int contype;
   int leafmatch;
+  int ondisk;       /* out-of-core execution TODO wtm*/
   vtx_type coarsen_to;
   wgt_type maxvwgt;
   double stopratio;

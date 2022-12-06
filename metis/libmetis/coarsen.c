@@ -58,9 +58,9 @@ graph_t *CoarsenGraph(ctrl_t *ctrl, graph_t *graph)
         break;
       default:
         gk_errexit(SIGERR, "Unknown ctype: %d\n", ctrl->ctype);
-    }
+    } /* TODO wtm matching 函数结束之后会有 CreateCoarseGraph 调用 */
 
-    graph_WriteToDisk(ctrl, graph);
+    graph_WriteToDisk(ctrl, graph);     /* TODO wtm 重要参考位置 */
 
     graph = graph->coarser;
     eqewgts = 0;
@@ -1323,6 +1323,8 @@ graph_t *SetupCoarseGraph(graph_t *graph, idx_t cnvtxs, idx_t dovsize)
 /*************************************************************************/
 /*! This function re-adjusts the amount of memory that was allocated if
     it will lead to significant savings 
+  TODO wtm
+  这说明一开始申请内存的时候申请的量并不精确。找出精确申请的量。
  */
 /*************************************************************************/
 void ReAdjustMemory(ctrl_t *ctrl, graph_t *graph, graph_t *cgraph) 

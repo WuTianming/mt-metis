@@ -192,6 +192,7 @@ static const cmd_opt_t OPTS[] = {
       SCANTYPE_CHOICES,S_ARRAY_SIZE(SCANTYPE_CHOICES)},
   {MTMETIS_OPTION_VERSION,'\0',"version","Display the current version.", \
       CMD_OPT_FLAG,NULL,0}
+    // TODO add ondisk options set here
 };
 
 

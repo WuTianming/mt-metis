@@ -403,6 +403,10 @@ static void S_graph_init(
   /* linked-list structure */
   graph->coarser = NULL;
   graph->finer = NULL;
+
+  /* out-of-core processing related */
+  graph->gID = 0;
+  graph->ondisk = 0;
 }
 
 
@@ -2059,6 +2063,7 @@ void graph_readjust_memory(
 }
 
 
+/* TODO wtm this function is useful */
 size_t graph_size(
     graph_type const * const graph)
 {
@@ -2176,7 +2181,7 @@ graph_type * par_graph_setup(
 
   graph->mynvtxs[myid] = nvtxs;
   graph->mynedges[myid] = xadj[nvtxs];
-  graph->xadj[myid] = xadj;
+  graph->xadj[myid] = xadj;   // Caveat wtm: LEAK ?????
   graph->adjncy[myid] = adjncy;
   if (adjwgt) {
     graph->adjwgt[myid] = adjwgt;

@@ -107,7 +107,8 @@ typedef enum mtmetis_option_t {
   MTMETIS_OPTION_UBFACTOR,
   MTMETIS_OPTION_CTYPE,
   MTMETIS_OPTION_CONTYPE,
-  MTMETIS_OPTION_LEAFMATCH,
+  MTMETIS_OPTION_LEAFMATCH, // TODO 这个就是TWOHOP，实锤了，在src/imetis.c:177
+  MTMETIS_OPTION_ONDISK,    // TODO wtm
   MTMETIS_OPTION_RTYPE,
   MTMETIS_OPTION_PTYPE,
   MTMETIS_OPTION_VERBOSITY,
@@ -211,7 +212,7 @@ typedef enum mtmetis_ignore_t {
 ******************************************************************************/
 
 
-static size_t const MTMETIS_NOPTIONS = __MTMETIS_OPTION_TERM;
+static size_t const MTMETIS_NOPTIONS = __MTMETIS_OPTION_TERM;   // TODO 这里很妙，用 enum 的结尾的自动编号来确定 option 个数
 static double const MTMETIS_VAL_OFF = -DBL_MAX;
 
 

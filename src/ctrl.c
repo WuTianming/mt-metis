@@ -196,6 +196,7 @@ ctrl_type * ctrl_create(void)
   ctrl->vwgtdegree = DEFAULT_VWGTDEGREE;
   ctrl->contype = DEFAULT_CONTYPE;
   ctrl->ignore = DEFAULT_IGNORE;
+  ctrl->ondisk = 1;   // TODO wtm 1 for enabled
 
   return ctrl;
 }
@@ -376,6 +377,11 @@ int ctrl_parse(
 
   if (options[MTMETIS_OPTION_LEAFMATCH] != MTMETIS_VAL_OFF) {
     ctrl->leafmatch = (int)options[MTMETIS_OPTION_LEAFMATCH];
+  }
+
+  // TODO wtm
+  if (options[MTMETIS_OPTION_ONDISK] != MTMETIS_VAL_OFF) {
+    ctrl->ondisk = (int)options[MTMETIS_OPTION_ONDISK];
   }
 
   if (options[MTMETIS_OPTION_RTYPE] != MTMETIS_VAL_OFF) {

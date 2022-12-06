@@ -75,10 +75,13 @@ typedef struct graph_type {
   /* metrics */
   wgt_type mincut, minsep;
   vtx_type minvol;
-  /* "To free, or not free" */
+  /* "To free, or not free" */                    /* TODO use this for ondisk processing */
   int free_xadj, free_vwgt, free_vsize, free_adjncy, free_adjwgt;
   /* graphs in the heirarchy */
   struct graph_type *coarser, *finer;
+  /* various fields for out-of-core processing */ /* TODO wtm added from METIS */
+  int gID;
+  int ondisk;
 } graph_type;
 
 
