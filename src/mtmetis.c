@@ -91,6 +91,25 @@ static void S_launch_func(
   graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->xadj, \
       arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
 
+  // optimization:
+  // free those from wildriver (read in)
+
+  if (myid == 0) {
+    if (arg->xadj) {
+      dl_free(arg->xadj);
+    }
+    if (arg->adjncy) {
+      dl_free(arg->adjncy);
+    }
+    if (arg->vwgt) {
+      dl_free(arg->vwgt);
+    }
+    if (arg->adjwgt) {
+      dl_free(arg->adjwgt);
+    }
+  }
+  dlthread_barrier(ctrl->comm);
+
   /* allocate local output vector */
   dwhere[myid] = pid_alloc(graph->mynvtxs[myid]);
 

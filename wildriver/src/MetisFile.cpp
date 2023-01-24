@@ -123,6 +123,7 @@ void MetisFile::readHeader()
   m_numVertices = std::stoull(line,&offset,10);
   line = line.substr(offset);
 
+  // Caveat/NOTE: total number of edges read in [and stored] is 2x the number declared in the graph file header
   m_numEdges = std::stoull(line,&offset,10)*2;
   line = line.substr(offset);
 

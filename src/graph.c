@@ -2063,7 +2063,6 @@ void graph_readjust_memory(
 }
 
 
-/* TODO wtm this function is useful */
 size_t graph_size(
     graph_type const * const graph)
 {
@@ -2121,6 +2120,39 @@ size_t graph_size(
   if (graph->label) {
     nbytes += (sizeof(vtx_type)*nvtxs) + (sizeof(vtx_type*)*nthreads);
   }
+
+  return nbytes;
+}
+
+
+size_t graph_size_gross(
+    graph_type const * const graph)
+{
+  size_t nbytes = 0;
+
+  vtx_type const nvtxs  = graph->nvtxs;
+  adj_type const nedges = graph->nedges;
+
+  /* where and pwgts will be ignored for now as they should be moved to a
+   * different structure */
+
+  /* HINT
+   * pid_type   uint32
+   * adj_type   uint64
+   * vtx_type   uint64
+   * wgt_type    int64 (* for large graphs like papers100M)
+   */
+
+  if (graph->group)  { nbytes += (sizeof(pid_type)*nvtxs); }  // which thread the node belongs to
+
+  if (graph->xadj)   { nbytes += (sizeof(adj_type)*nvtxs); }  // +1 omitted
+  if (graph->vwgt)   { nbytes += (sizeof(wgt_type)*nvtxs); }
+  if (graph->cmap)   { nbytes += (sizeof(vtx_type)*nvtxs); }
+  if (graph->rename) { nbytes += (sizeof(vtx_type)*nvtxs); }
+  if (graph->label)  { nbytes += (sizeof(vtx_type)*nvtxs); }
+
+  if (graph->adjncy) { nbytes += (sizeof(vtx_type)*nedges); }
+  if (graph->adjwgt) { nbytes += (sizeof(wgt_type)*nedges); }
 
   return nbytes;
 }

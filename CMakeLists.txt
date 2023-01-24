@@ -20,7 +20,9 @@ if (DEFINED DEBUG OR DEFINED ASSERT)
   set(CMAKE_BUILD_TYPE Debug)
   message("Building a debug release")
 else()
-  set(CMAKE_BUILD_TYPE Release)
+# Caveat(wtm): flag set for debugging and vtune
+  # set(CMAKE_BUILD_TYPE Release)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
   add_definitions(-DNDEBUG=1)
   add_definitions(-DNDEBUG2=1)
   message("Building an optimized release")
@@ -77,8 +79,10 @@ if (DEFINED DEVEL AND NOT DEVEL EQUAL 0)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pedantic") 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstrict-aliasing") 
 endif()
-
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99") 
+ 
+# Caveat(wtm): flag set for debugging and vtune
+# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99") 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -g") 
 
 if ("${CMAKE_C_COMPILER_ID}" STREQUAL "Intel")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -no-ansi-alias")

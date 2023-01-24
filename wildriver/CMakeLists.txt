@@ -14,10 +14,15 @@ if (DEFINED DEBUG)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
   message("Building a debug release")
 else()
-  set(CMAKE_BUILD_TYPE Release)
+# Caveat(wtm): flag set for debugging and vtune
+  # set(CMAKE_BUILD_TYPE Release)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
   add_definitions(-DNDEBUG=1)
   message("Building an optimized release")
 endif()
+
+# Caveat(wtm): flag set for debugging and vtune
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
 
 if (STATIC)
   set(WILDRIVER_LIBRARY_TYPE STATIC)

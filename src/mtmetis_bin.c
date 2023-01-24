@@ -457,6 +457,8 @@ int main(
   if (options) {
     dl_free(options);
   }
+  // Optimization: these are cleaned early after data reading completed
+  /*
   if (xadj) {
     dl_free(xadj);
   }
@@ -469,6 +471,7 @@ int main(
   if (adjwgt) {
     dl_free(adjwgt);
   }
+  */
   if (owhere) {
     dl_free(owhere);
   }

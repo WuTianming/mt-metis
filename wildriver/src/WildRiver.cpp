@@ -593,13 +593,13 @@ extern "C" int wildriver_read_graph(
 
     // allocate matrix
     size_t nbytes = sizeof(ind_t)*(nvtxs+1);
-    std::unique_ptr<ind_t,c_delete> xadj((ind_t*)malloc(nbytes));
+    std::unique_ptr<ind_t,c_delete> xadj((ind_t*)malloc(nbytes));       // TODO malloc: 19.6 MB = size_t * |V|
     if (!xadj.get()) {
       throw OutOfMemoryException(nbytes);
     }
 
     nbytes = sizeof(dim_t)*nedges;
-    std::unique_ptr<dim_t,c_delete> adjncy((dim_t*)malloc(nbytes));
+    std::unique_ptr<dim_t,c_delete> adjncy((dim_t*)malloc(nbytes));     // TODO malloc: 1 GB = 8bytes * (|E|*2)
     if (!adjncy.get()) {
       throw OutOfMemoryException(nbytes);
     }
@@ -608,7 +608,7 @@ extern "C" int wildriver_read_graph(
     if (r_vwgt && nvwgts > 0) {
       // we need to use rowval
       nbytes = sizeof(val_t)*nvtxs*nvwgts;
-      vwgt.reset((val_t*)malloc(nbytes));
+    vwgt.reset((val_t*)malloc(nbytes));                                 // 点权，这里没有用到
       if (!adjncy.get()) {
         throw OutOfMemoryException(nbytes);
       }
@@ -618,7 +618,8 @@ extern "C" int wildriver_read_graph(
     if (r_adjwgt) {
       // we need to use rowval
       nbytes = sizeof(val_t)*nedges;
-      adjwgt.reset((val_t*)malloc(nbytes));
+      // TODO 边权。for fair play, should I change to an 8-byte data type for edge weights?
+      adjwgt.reset((val_t*)malloc(nbytes));                             // TODO malloc: 990 MB = 4bytes * (|E|*2)
       if (!adjncy.get()) {
         throw OutOfMemoryException(nbytes);
       }
