@@ -166,6 +166,9 @@ static const cmd_opt_t OPTS[] = {
   {MTMETIS_OPTION_UBFACTOR,'b',"balance","The balance constraint " \
       "(default=1.03, which means allowing for a 3% imbalance).", \
       CMD_OPT_FLOAT,NULL,0},
+  {MTMETIS_OPTION_ONDISK,'o',"ondisk","Store graphs to disk " \
+      "during coarsening in order to reduce memory requirements (default=true).", \
+      CMD_OPT_BOOL,NULL,0},
   {MTMETIS_OPTION_PTYPE,'p',"ptype","The type of partition to compute " \
       "(default=kway)",CMD_OPT_CHOICE,PTYPE_CHOICES, \
       S_ARRAY_SIZE(PTYPE_CHOICES)},
@@ -192,7 +195,6 @@ static const cmd_opt_t OPTS[] = {
       SCANTYPE_CHOICES,S_ARRAY_SIZE(SCANTYPE_CHOICES)},
   {MTMETIS_OPTION_VERSION,'\0',"version","Display the current version.", \
       CMD_OPT_FLAG,NULL,0}
-    // TODO add ondisk options set here
 };
 
 

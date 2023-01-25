@@ -252,6 +252,8 @@ int mtmetis_partition_explicit(
         trans_dtype_string(ctrl->dist));
     printf("Leaf-Matching: %s | Remove Islands: %s\n", \
         S_bool2str(ctrl->leafmatch),S_bool2str(ctrl->removeislands));
+    printf("On-Disk: %s\n", \
+        S_bool2str(ctrl->ondisk));
     dl_print_footer('%');
   }
 
