@@ -18,6 +18,7 @@
 
 #include "base.h"
 #include "ctrl.h"
+#include <pthread.h>
 
 
 
@@ -75,13 +76,14 @@ typedef struct graph_type {
   /* metrics */
   wgt_type mincut, minsep;
   vtx_type minvol;
-  /* "To free, or not free" */                    /* TODO use this for ondisk processing */
+  /* "To free, or not free" */
   int free_xadj, free_vwgt, free_vsize, free_adjncy, free_adjwgt;
   /* graphs in the heirarchy */
   struct graph_type *coarser, *finer;
-  /* various fields for out-of-core processing */ /* TODO wtm added from METIS */
+  /* various fields for out-of-core processing */
   int gID;
   int ondisk;
+  pthread_t io_pid;         // thread id executing the io task
 } graph_type;
 
 

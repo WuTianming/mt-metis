@@ -24,6 +24,7 @@
 #include "check.h"
 #include "imetis.h"
 
+#include "asyncio.h"
 
 
 
@@ -177,108 +178,6 @@ static wgt_type S_ser_calc_vsep(
   return sep;
 }
 
-static void S_ser_write_to_disk(
-    ctrl_type * const ctrl,
-    graph_type * const graph) {
-  static int gID = 1;
-
-  // size_t size_before = graph_size(graph);
-
-  vtx_type *nvtxs, *nedges, ncon;
-  tid_type nthreads = ctrl->nthreads;
-  char outfile[1024];
-  FILE *fpout;
-
-  if (ctrl->ondisk == 0)
-    return;
-
-  if (graph->gID > 0) {
-    sprintf(outfile, "dump_mtmetis.%d", graph->gID);
-    gk_rmpath(outfile);
-  }
-
-  graph->gID    = gID++;
-  sprintf(outfile, "dump_mtmetis.%d", graph->gID);
-
-  if ((fpout = fopen(outfile, "wb")) == NULL)
-    abort();
-
-  nvtxs  = graph->mynvtxs;
-  nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
-
-  if (graph->free_xadj) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      if (fwrite(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpout) != (size_t)(nvtxs[myid]+1))
-        abort();
-        // goto ERROR;
-      dl_free(graph->xadj[myid]);
-      graph->xadj[myid] = NULL;
-    }
-    // dl_free(graph->xadj);
-    // graph->xadj = NULL;
-  }
-  if (graph->free_vwgt) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      if (fwrite(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpout) != (size_t)(nvtxs[myid]*ncon))
-        abort();
-      dl_free(graph->vwgt[myid]);
-      graph->vwgt[myid] = NULL;
-    }
-    // dl_free(graph->vwgt);
-    // graph->vwgt = NULL;
-  }
-  if (graph->free_adjncy) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      if (fwrite(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpout) != (size_t)nedges[myid])
-        abort();
-      dl_free(graph->adjncy[myid]);
-      graph->adjncy[myid] = NULL;
-    }
-    // dl_free(graph->adjncy);
-    // graph->adjncy = NULL;
-  }
-  if (graph->free_adjwgt) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      if (fwrite(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpout) != (size_t)nedges[myid])
-        abort();
-      dl_free(graph->adjwgt[myid]);
-      graph->adjwgt[myid] = NULL;
-    }
-    // dl_free(graph->adjwgt);
-    // graph->adjwgt = NULL;
-  }
-
-  fclose(fpout);
-
-  // TODO see: S_graph_free_part @ graph.c
-  ///////// BEGIN copy from graph.c
-  /* free auxillery things */
-  /*
-  if (graph->label) {
-    dl_free(graph->label[myid]);
-  }
-  if (graph->group) {
-    dl_free(graph->group[myid]);
-  }
-  */
-  ///////// END copy from graph.c
-
-  graph->ondisk = 1;
-
-  // size_t size_after = graph_size(graph);
-
-  // printf("%d -> %d\n", (int)(size_before >> 20), (int)(size_after >> 20));
-
-  return;
-
-ERROR:
-  printf("Failed on writing %s\n", outfile);
-  fclose(fpout);
-  gk_rmpath(outfile);
-  graph->ondisk = 0;
-}
-
 static void S_ser_read_from_disk(
     ctrl_type * const ctrl,
     graph_type * const graph) {
@@ -289,6 +188,10 @@ static void S_ser_read_from_disk(
 
   if (ctrl->ondisk == 0 || !graph->ondisk)
     return;
+
+  // now that the graph had been written onto the disk,
+  // wait for the write to complete
+  pthread_join(graph->io_pid, NULL);
 
   sprintf(infile, "dump_mtmetis.%d", graph->gID);
 
@@ -331,10 +234,13 @@ static void S_ser_read_from_disk(
 
   fclose(fpin);
   printf("ondisk: deleting %s\n", infile);
-  gk_rmpath(infile);
+  // gk_rmpath(infile);
+  async_rmpath(infile);   // save a few hundred milliseconds
 
   graph->gID    = 0;
   graph->ondisk = 0;
+  graph->io_pid = 0;
+
   return;
 
 ERROR:
@@ -403,15 +309,13 @@ static wgt_type S_par_partition_mlevel(
 
     par_refine_graph(ctrl,cgraph);
   } else {
-    /* TODO wtm: dump current graph onto the disk; then */
-    /* recurse */
-
-    // 就在这里加 ondisk
     if (ctrl->ondisk) {
-      test_func(ctrl, graph);
-      if (dlthread_get_id(ctrl->comm) == 0)
-        S_ser_write_to_disk(ctrl, graph);
-      dlthread_barrier(ctrl->comm);
+      test_func(ctrl, graph);   // TODO clean up
+
+      // a new thread writes the graph onto disk
+      if (dlthread_get_id(ctrl->comm) == 0) {
+        async_dump_to_disk(ctrl, graph);
+      }
     }
 
     S_par_partition_mlevel(ctrl,cgraph);
@@ -420,11 +324,9 @@ static wgt_type S_par_partition_mlevel(
   if (ctrl->ondisk) {
     if (dlthread_get_id(ctrl->comm) == 0) {
       S_ser_read_from_disk(ctrl, graph);
-      if (graph->finer)
-        S_ser_read_from_disk(ctrl, graph->finer);
     }
     dlthread_barrier(ctrl->comm);
-    test_func(ctrl, graph);
+    test_func(ctrl, graph);     // TODO clean up
   }
 
   /* uncoarsen this level */
@@ -701,7 +603,7 @@ static wgt_type S_par_partition(
         case MTMETIS_PTYPE_ND:
         case MTMETIS_PTYPE_VSEP:
         case MTMETIS_PTYPE_ESEP:
-        case MTMETIS_PTYPE_KWAY:    // TODO wtm point of interest
+        case MTMETIS_PTYPE_KWAY:
         default:
           /* everyone else works fine with this */
           curobj = S_par_partition_mlevel(ctrl,graph);

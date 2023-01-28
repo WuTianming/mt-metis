@@ -3614,6 +3614,8 @@ graph_type * par_graph_distribute(
     graph->free_adjncy = 1;
     graph->free_adjwgt = 1;
     graph->free_vwgt = 1;
+
+    graph->io_pid = 0;
   }
 
   par_graph_setup_twgts(graph);
