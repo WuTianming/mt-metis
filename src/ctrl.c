@@ -190,7 +190,7 @@ ctrl_type * ctrl_create(void)
   ctrl->time = DEFAULT_TIMING;
   ctrl->metis_serial = DEFAULT_METIS_SERIAL;
   ctrl->partfactor = DEFAULT_PARTFACTOR;
-  ctrl->stopratio = DEFAULT_STOP_RATIO;
+  ctrl->stopratio = DEFAULT_STOP_RATIO;    // default is 0.84
   ctrl->removeislands = DEFAULT_REMOVEISLANDS;
   ctrl->leafmatch = DEFAULT_LEAFMATCH;
   ctrl->vwgtdegree = DEFAULT_VWGTDEGREE;
@@ -246,7 +246,9 @@ void ctrl_setup(
       ctrl->coarsen_to = 200;
       break;
     case MTMETIS_PTYPE_KWAY:
-      ctrl->coarsen_to = dl_max(nvtxs/(20*pid_uplog2(nparts)),30*nparts);
+      // ctrl->coarsen_to = dl_max(nvtxs/(20*pid_uplog2(nparts)),30*nparts);
+      ctrl->coarsen_to = 100*nparts;    // make sure initpart only needs to handle small graphs, reducing memory usage
+      printf(">>> coarsen_to = %d; ratio = %lf\n", ctrl->coarsen_to, (double)(20*pid_uplog2(nparts)));
       break;
     case MTMETIS_PTYPE_ND:
     case MTMETIS_PTYPE_VSEP:

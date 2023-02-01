@@ -284,6 +284,9 @@ static wgt_type S_par_partition_mlevel(
   */
 
   /* if we reduce total graph size, or just vertices keep going */
+  /* explanation: in the best case, we want either total graph size
+                  or vertex count to be steadily halved */
+  /* failure to cut both in half leads to premature halt */
   ratio = dl_min(graph_size(cgraph)/(double)(graph_size(graph)), \
       cgraph->nvtxs/(double)graph->nvtxs);
 
@@ -310,7 +313,8 @@ static wgt_type S_par_partition_mlevel(
     par_refine_graph(ctrl,cgraph);
   } else {
     if (ctrl->ondisk) {
-      test_func(ctrl, graph);   // TODO clean up
+      if (dlthread_get_id(ctrl->comm) == 0)
+        test_func(ctrl, graph);   // TODO clean up
 
       // a new thread writes the graph onto disk
       if (dlthread_get_id(ctrl->comm) == 0) {
@@ -326,7 +330,8 @@ static wgt_type S_par_partition_mlevel(
       S_ser_read_from_disk(ctrl, graph);
     }
     dlthread_barrier(ctrl->comm);
-    test_func(ctrl, graph);     // TODO clean up
+    if (dlthread_get_id(ctrl->comm) == 0)
+      test_func(ctrl, graph);     // TODO clean up
   }
 
   /* uncoarsen this level */

@@ -18,9 +18,7 @@ static void S_ser_write_to_disk(
     return;
 
   // only save the first 3 graphs provides acceptable memory peak
-  if (gID >= 4) {
-    return;
-  }
+  // if (gID >= 4) { return; }
 
   graph->ondisk = 1;  // TODO: make this a macro
 
