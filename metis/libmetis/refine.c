@@ -36,7 +36,13 @@ void Refine2Way(ctrl_t *ctrl, graph_t *orggraph, graph_t *graph, real_t *tpwgts)
     if (graph == orggraph)
       break;
 
+    // TODO figure out how to force ondisk for METIS recursive bisect
+    // the fastest way would be to copy from the newest METIS software codebase
+    // graph_ReadFromDisk(ctrl, graph);
+
     graph = graph->finer;
+
+    // graph_ReadFromDisk(ctrl, graph);
 
     IFSET(ctrl->dbglvl, METIS_DBG_TIME, gk_startwctimer(ctrl->ProjectTmr));
 

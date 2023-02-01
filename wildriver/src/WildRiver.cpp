@@ -619,7 +619,7 @@ extern "C" int wildriver_read_graph(
       // we need to use rowval
       nbytes = sizeof(val_t)*nedges;
       // TODO 边权。for fair play, should I change to an 8-byte data type for edge weights?
-      adjwgt.reset((val_t*)malloc(nbytes));                             // TODO malloc: 990 MB = 4bytes * (|E|*2)
+      adjwgt.reset((val_t*)malloc(nbytes));                             // TODO malloc: 990 MB = 8bytes * (|E|*2)
       if (!adjncy.get()) {
         throw OutOfMemoryException(nbytes);
       }

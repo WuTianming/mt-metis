@@ -382,6 +382,14 @@ int main(
   /* read the input graph */
   rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy, \
       &vwgt,&adjwgt);
+  
+  /* NOTE about input structures
+    arrays from the input are:
+    - xadj
+    - adjncy
+    - vwgt
+    - adjwgt
+  */
 
   if (rv != 1) {
     rv = 4;

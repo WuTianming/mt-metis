@@ -174,10 +174,11 @@ wgt_type metis_initcut(
   options[METIS_OPTION_SEED] = ctrl->seed + myid;
   options[METIS_OPTION_NCUTS] = ncuts;
   options[METIS_OPTION_DBGLVL] = 0;
-  options[METIS_OPTION_NO2HOP] = !ctrl->leafmatch;    // TODO wtm 实锤了，leafmatch就是 TWOHOP
-  // TODO 把 ondisk 传递给 METIS
-  // options[METIS_OPTION_ONDISK] = ctrl->ondisk;        // TODO 决定一下在initpart阶段是否有必要ondisk
-  options[METIS_OPTION_ONDISK] = 0;        // TODO 决定一下在initpart阶段是否有必要ondisk
+  options[METIS_OPTION_NO2HOP] = !ctrl->leafmatch;    // leafmatch is roughly equivalent to TWOHOP
+  // TODO fix ondisk for METIS recursive bisect
+  // TODO then pass the ondisk param to serial METIS
+  // options[METIS_OPTION_ONDISK] = ctrl->ondisk;
+  options[METIS_OPTION_ONDISK] = 0;
 
   m_nparts = (idx_t)nparts;
   m_nvtxs = (idx_t)nvtxs;
