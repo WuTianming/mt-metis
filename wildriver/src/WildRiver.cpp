@@ -608,7 +608,7 @@ extern "C" int wildriver_read_graph(
     if (r_vwgt && nvwgts > 0) {
       // we need to use rowval
       nbytes = sizeof(val_t)*nvtxs*nvwgts;
-    vwgt.reset((val_t*)malloc(nbytes));                                 // 点权，这里没有用到
+      vwgt.reset((val_t*)malloc(nbytes));
       if (!adjncy.get()) {
         throw OutOfMemoryException(nbytes);
       }

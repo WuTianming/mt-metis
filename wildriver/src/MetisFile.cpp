@@ -412,6 +412,7 @@ void MetisFile::read(
     // handle vertex weights
     if (m_numVertexWeights == 0 && vwgt) {
       // set unit vertex weights
+      // vertex weight can be set to in-deg for edge count balancing
       vwgt[i] = 1;
     }
 

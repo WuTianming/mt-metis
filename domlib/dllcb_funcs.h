@@ -79,8 +79,10 @@ DLLCB_VISIBILITY void DLLCB_PUB(combuffer_add)(
   DLLCB_PRI(node_t) * msg, * last;
 
   size_t const myid = dlthread_get_id(com->comm);
-  DLLCB_PRI(info_t) * const info = com->infos+myid;
+    DLLCB_PRI(info_t) * const info = com->infos+myid;
 
+  // for now, combuffer is always allocated with maximum size;
+  // TODO(wtm) try to make this more efficient by allocating lazily on the fly
   DL_ASSERT(info->lastmsg < info->maxmsgs,"Overflowed combuffer");
 
   msg = info->nodes + (info->lastmsg++);
