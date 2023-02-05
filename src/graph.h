@@ -82,7 +82,8 @@ typedef struct graph_type {
   struct graph_type *coarser, *finer;
   /* various fields for out-of-core processing */
   int gID;
-  int ondisk;
+  /* a successful pthread_join converts the state from 1 to 2, or from 2 to 0. */
+  enum { RESIDENT=0, OFFLOADING=1, LOADING=2 } ondisk;
   pthread_t io_pid;         // thread id executing the io task
 } graph_type;
 

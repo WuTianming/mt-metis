@@ -14,13 +14,8 @@ static void S_ser_write_to_disk(
   char outfile[1024];
   FILE *fpout;
 
-  if (ctrl->ondisk <= 0)
-    return;
-
   // only save the first 3 graphs provides acceptable memory peak
   // if (gID >= 4) { return; }
-
-  graph->ondisk = 1;  // TODO: make this a macro
 
   if (graph->gID > 0) {
     sprintf(outfile, "dump_mtmetis.%d", graph->gID);
@@ -104,23 +99,96 @@ ERROR:
   printf("Failed on writing %s\n", outfile);
   fclose(fpout);
   gk_rmpath(outfile);
-  graph->ondisk = 0;
+  // graph->ondisk = 0;
+}
+
+static void S_ser_read_from_disk(
+    ctrl_type * const ctrl,
+    graph_type * const graph) {
+
+  if (graph->ondisk == RESIDENT) return;
+
+  vtx_type *nvtxs, *nedges, ncon;
+  tid_type nthreads = ctrl->nthreads;
+  char infile[1024];
+  FILE *fpin;
+
+  sprintf(infile, "dump_mtmetis.%d", graph->gID);
+
+  if ((fpin = fopen(infile, "rb")) == NULL)
+    return;
+
+  nvtxs  = graph->mynvtxs;
+  nedges = graph->mynedges;
+  ncon   = 1;  // only 1 type of constraint is supported
+
+  if (graph->free_xadj) {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->xadj[myid] = adj_alloc(nvtxs[myid]+1);
+      if (fread(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpin) != (size_t)(nvtxs[myid]+1))
+        abort();
+      graph->xadj[myid][0] = 0;
+    }
+  }
+  if (graph->free_vwgt) {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->vwgt[myid] = wgt_alloc(nvtxs[myid]*ncon);
+      if (fread(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpin) != (size_t)(nvtxs[myid]*ncon))
+        abort();
+    }
+  }
+  if (graph->free_adjncy) {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->adjncy[myid] = vtx_alloc(nedges[myid]);
+      if (fread(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
+        abort();
+    }
+  }
+  if (graph->free_adjwgt) {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->adjwgt[myid] = wgt_alloc(nedges[myid]);
+      if (fread(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
+        abort();
+    }
+  }
+
+  fclose(fpin);
+  printf("ondisk: deleting %s\n", infile);
+  // gk_rmpath(infile);
+  async_rmpath(infile);   // save a few hundred milliseconds
+
+  graph->gID    = 0;
+
+  return;
+
+ERROR:
+  printf("Failed to restore graph %s from the disk\n", infile);
+  fclose(fpin);
+  gk_rmpath(infile);
+  // graph->ondisk = 0;
 }
 
 asyncio_task *get_async_task(ctrl_type *ctrl, graph_type *graph) {
-  asyncio_task *t = malloc(sizeof(asyncio_task));   // Caveat: this is never freed, for now
+  asyncio_task *t = malloc(sizeof(asyncio_task));
   t->ctrl = ctrl;
   t->graph = graph;
-  t->status = STANDBY;
   return t;
 }
 
-static void launch_dump(void *p) {
+static void *launch_dump(void *p) {
   asyncio_task *t = (asyncio_task *)p;
-  t->graph->io_pid = pthread_self();
-  t->status = ONGOING;
+
   S_ser_write_to_disk(t->ctrl, t->graph);
-  t->status = DONE;
+
+  return p;
+}
+
+static void *launch_read(void *p) {
+  asyncio_task *t = (asyncio_task *)p;
+
+  S_ser_read_from_disk(t->ctrl, t->graph);
+
+  return p;
 }
 
 static void launch_cmd(void *p) {
@@ -130,10 +198,16 @@ static void launch_cmd(void *p) {
 }
 
 void async_dump_to_disk(ctrl_type *ctrl, graph_type *graph) {
-  asyncio_task *t = get_async_task(ctrl, graph);
+  if (ctrl->ondisk == 0)
+    return;
+
+  // the state machine
+  assert(graph->ondisk == RESIDENT);
+  graph->ondisk = OFFLOADING;
 
   // nesting a pthread call inside OpenMP structures is perfectly okay
   pthread_t pid;
+  asyncio_task *t = get_async_task(ctrl, graph);
 
   // create thread to run `launch_dump()`
   int ret = pthread_create(&pid, NULL, &launch_dump, (void *)t);
@@ -142,7 +216,50 @@ void async_dump_to_disk(ctrl_type *ctrl, graph_type *graph) {
     exit(1);
   }
 
+  graph->io_pid = pid;
+
   // the thread will be joined later when trying to read the file
+}
+
+void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
+  if (ctrl->ondisk == 0)
+    return;
+
+  asyncio_task *pre_t;
+
+  // the state machine:
+  // now that the graph had been written onto the disk,
+  // wait for the write to complete
+  if (graph->ondisk != RESIDENT) {
+    assert(graph->ondisk == OFFLOADING);
+    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    graph->ondisk = LOADING;
+  }
+
+  pthread_t pid;
+  asyncio_task *t = get_async_task(ctrl, graph);
+  int ret = pthread_create(&pid, NULL, &launch_read, (void *)t);
+  if (ret) {
+    fprintf(stderr, "pthread_create for async read from disk failed.\n");
+    exit(1);
+  }
+
+  graph->io_pid = pid;
+
+  // the thread will be joined when trying to ensure the file is ready
+}
+
+void await_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
+  if (ctrl->ondisk == 0)
+    return;
+
+  asyncio_task *pre_t;
+
+  // the state machine:
+  assert(graph->ondisk == LOADING);
+  pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+  graph->io_pid = 0;
+  graph->ondisk = RESIDENT;
 }
 
 void async_rmpath(char *fname) {

@@ -178,81 +178,6 @@ static wgt_type S_ser_calc_vsep(
   return sep;
 }
 
-static void S_ser_read_from_disk(
-    ctrl_type * const ctrl,
-    graph_type * const graph) {
-  vtx_type *nvtxs, *nedges, ncon;
-  tid_type nthreads = ctrl->nthreads;
-  char infile[1024];
-  FILE *fpin;
-
-  if (ctrl->ondisk == 0 || !graph->ondisk)
-    return;
-
-  // now that the graph had been written onto the disk,
-  // wait for the write to complete
-  pthread_join(graph->io_pid, NULL);
-
-  sprintf(infile, "dump_mtmetis.%d", graph->gID);
-
-  if ((fpin = fopen(infile, "rb")) == NULL)
-    return;
-
-  nvtxs  = graph->mynvtxs;
-  nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
-
-  if (graph->free_xadj) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      graph->xadj[myid] = adj_alloc(nvtxs[myid]+1);
-      if (fread(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpin) != (size_t)(nvtxs[myid]+1))
-        abort();
-      graph->xadj[myid][0] = 0;
-    }
-  }
-  if (graph->free_vwgt) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      graph->vwgt[myid] = wgt_alloc(nvtxs[myid]*ncon);
-      if (fread(graph->vwgt[myid], sizeof(wgt_type), nvtxs[myid]*ncon, fpin) != (size_t)(nvtxs[myid]*ncon))
-        abort();
-    }
-  }
-  if (graph->free_adjncy) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      graph->adjncy[myid] = vtx_alloc(nedges[myid]);
-      if (fread(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
-        abort();
-    }
-  }
-  if (graph->free_adjwgt) {
-    for (int myid = 0; myid < nthreads; ++myid) {
-      graph->adjwgt[myid] = wgt_alloc(nedges[myid]);
-      if (fread(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
-        abort();
-    }
-  }
-
-  fclose(fpin);
-  printf("ondisk: deleting %s\n", infile);
-  // gk_rmpath(infile);
-  async_rmpath(infile);   // save a few hundred milliseconds
-
-  graph->gID    = 0;
-  graph->ondisk = 0;
-  graph->io_pid = 0;
-
-  return;
-
-ERROR:
-  printf("Failed to restore graph %s from the disk\n", infile);
-  fclose(fpin);
-  gk_rmpath(infile);
-  graph->ondisk = 0;
-}
-
-
-
-
 /******************************************************************************
 * PRIVATE PARALLEL FUNCTIONS **************************************************
 ******************************************************************************/
@@ -327,7 +252,12 @@ static wgt_type S_par_partition_mlevel(
 
   if (ctrl->ondisk) {
     if (dlthread_get_id(ctrl->comm) == 0) {
-      S_ser_read_from_disk(ctrl, graph);
+      // S_ser_read_from_disk(ctrl, graph);
+      printf("1\n");
+      async_read_from_disk(ctrl, graph);
+      printf("2\n");
+      await_read_from_disk(ctrl, graph);
+      printf("3\n");
     }
     dlthread_barrier(ctrl->comm);
     if (dlthread_get_id(ctrl->comm) == 0)
