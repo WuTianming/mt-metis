@@ -253,11 +253,10 @@ static wgt_type S_par_partition_mlevel(
   if (ctrl->ondisk) {
     if (dlthread_get_id(ctrl->comm) == 0) {
       // S_ser_read_from_disk(ctrl, graph);
-      printf("1\n");
       async_read_from_disk(ctrl, graph);
-      printf("2\n");
+      if (graph->finer)
+        async_read_from_disk(ctrl, graph->finer);
       await_read_from_disk(ctrl, graph);
-      printf("3\n");
     }
     dlthread_barrier(ctrl->comm);
     if (dlthread_get_id(ctrl->comm) == 0)

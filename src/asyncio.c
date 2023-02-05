@@ -228,10 +228,12 @@ void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   asyncio_task *pre_t;
 
   // the state machine:
+  if (graph->ondisk == RESIDENT || graph->ondisk == LOADING)
+    return;
+
   // now that the graph had been written onto the disk,
   // wait for the write to complete
-  if (graph->ondisk != RESIDENT) {
-    assert(graph->ondisk == OFFLOADING);
+  if (graph->ondisk == OFFLOADING) {
     pthread_join(graph->io_pid, &pre_t); // free(pre_t);
     graph->ondisk = LOADING;
   }
@@ -256,10 +258,11 @@ void await_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   asyncio_task *pre_t;
 
   // the state machine:
-  assert(graph->ondisk == LOADING);
-  pthread_join(graph->io_pid, &pre_t); // free(pre_t);
-  graph->io_pid = 0;
-  graph->ondisk = RESIDENT;
+  if (graph->ondisk == LOADING) {
+    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    graph->io_pid = 0;
+    graph->ondisk = RESIDENT;
+  }
 }
 
 void async_rmpath(char *fname) {
