@@ -52,8 +52,11 @@ typedef struct graph_type {
   adj_type * mynedges;
   adj_type ** xadj;
   wgt_type ** vwgt;
-  vtx_type ** adjncy;
+  vtx_type ** adjncy;       // TODO: only have one chunk resident in memory
   wgt_type ** adjwgt;
+  /* chunked adjncy */
+  size_t * chunkcnt;        // TODO initialize this
+  vtx_type ** chunkofst;    // vtx = mynvtxs + chunkofst[c]
   /* graph info */
   int uniformvwgt;
   int uniformadjwgt;
@@ -706,6 +709,7 @@ void par_graph_extract_parts(
 graph_type * par_graph_distribute(
     int distribution,
     vtx_type nvtxs, 
+    size_t   adjchunksize,
     adj_type const * xadj, 
     vtx_type const * adjncy, 
     wgt_type const * vwgt,

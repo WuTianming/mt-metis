@@ -147,13 +147,13 @@ static void S_par_contract_DENSE(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
-  adj_type cnedges, l, maxdeg, j, i;
+  adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
   tid_type o, t;
   vtx_type v, c, cg, k;
   wgt_type ewgt;
   adj_type * table;
   graph_type * cgraph;
-  graphdist_type dist;
+  graphdist_type cdist;
 
   tid_type const myid = dlthread_get_id(ctrl->comm);
   tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
@@ -173,85 +173,99 @@ static void S_par_contract_DENSE(
 
   cgraph = par_graph_setup_coarse(graph,mycnvtxs);
 
-  dist = cgraph->dist;
+  cdist = cgraph->dist;
 
-  S_adjust_cmap(graph->cmap[myid],mynvtxs,graph->dist,dist);
+  S_adjust_cmap(graph->cmap[myid],mynvtxs,graph->dist,cdist);
 
-  /* count possible edges */
-  cnedges = 0;
+  /* count possible edges (upper limit) */
+  cnedges_upperlimit = 0;
   maxdeg = 0;
   for (c=0;c<mycnvtxs;++c) {
-    v = fcmap[c];
+    v = fcmap[c];   // v is the first vertex that makes up coarse c
     o = myid;
     l = 0;
     do {
       l += gxadj[o][v+1] - gxadj[o][v];
+
+      // traverse like a linked list (although the match list is either len=1 or len=2)
+      // to accommodate cases of self-matching
       v = gmatch[o][v];
       if (v >= graph->mynvtxs[o]) {
         o = gvtx_to_tid(v,graph->dist);
         v = gvtx_to_lvtx(v,graph->dist);
       }
     } while (!(o == myid && v == fcmap[c]));
+
+    // the maximum degree possible for a coarse vtx (Caveat: can this get big?)
     dl_storemax(maxdeg,l);
-    cnedges += l;
+
+    // an upper limit for total coarse edges
+    cnedges_upperlimit += l;
   }
 
   adj_type * const mycxadj = cgraph->xadj[myid];
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges);
+  // over-allocating...
+  // TODO: apply the new chunk-based memory model to this function
+  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges_upperlimit);
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
-  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges);
+  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges_upperlimit);
 
   table = NULL;
 
   table = adj_init_alloc(NULL_ADJ,graph->gnvtxs);
 
-  cnedges = 0;
+  cnedges = 0;    // coarse edge count is to be calculated accurately later
   mycxadj[0] = 0;
 
   dlthread_barrier(ctrl->comm);
 
   /* set max degree for the coarse graph */
   for (c=0;c<mycnvtxs;++c) {
-    cg = lvtx_to_gvtx(c,myid,dist);
+    cg = lvtx_to_gvtx(c,myid,cdist);
     /* initialize the coarse vertex */
-    mycvwgt[c] = 0;
+    mycvwgt[c] = 0;     // the v weight is the sum of original vertices
 
     v = fcmap[c];
     o = myid;
     DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist),
         graph->dist),"%"PF_TID_T);
-    do { 
+    do {    // traverse all original vertices (o in v) for this coarse vertex c
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],dist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
       mycvwgt[c] += gvwgt[o][v];
 
+      // this kills locality when accessing the fine graph:
+      //   (o, v) = canonical(gmatch[o][v]);
+
+      /* for all edges emanating from (v in o): */
       for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
-        k = gadjncy[o][j];
+        k = gadjncy[o][j];    // TODO slice
         if (k < graph->mynvtxs[o]) {
           t = o;
         } else {
           t = gvtx_to_tid(k,graph->dist);
           k = gvtx_to_lvtx(k,graph->dist);
-        }
+        } // edge: (v in o) -> (k in t)
         k = gcmap[t][k];
-        if (gvtx_to_tid(k,dist) == myid) {
-          k = gvtx_to_lvtx(k,dist);
-        }
+        if (gvtx_to_tid(k,cdist) == myid) {
+          k = gvtx_to_lvtx(k,cdist);
+        } // k is now the canonical expression of the coarse vertex that j leads to
+
         if (k == c || k == cg) {
           /* internal edge */
         } else {
           /* external edge */
           i = table[k];
-          ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];
+          ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];  // TODO slice
           if (i == NULL_ADJ) {
             /* new edge */
-            mycadjncy[cnedges] = k;
-            mycadjwgt[cnedges] = ewgt;
-            table[k] = cnedges++; 
+            mycadjncy[cnedges] = k;     // TODO slice
+            mycadjwgt[cnedges] = ewgt;  // TODO slice
+            table[k] = cnedges++;       // put a new edge in the dense vector
           } else {
             /* duplicate edge */
-            mycadjwgt[i] += ewgt;
+            mycadjwgt[i] += ewgt;       // TODO slice
           }
         }
       }
@@ -266,7 +280,7 @@ static void S_par_contract_DENSE(
     /* clear the table */
     for (j = cnedges;j > mycxadj[c];) {
       --j;
-      k = mycadjncy[j];
+      k = mycadjncy[j];     // an std::unordered_map would be perfect here...
       table[k] = NULL_ADJ;
     }
 
@@ -277,6 +291,9 @@ static void S_par_contract_DENSE(
 
   cgraph->mynedges[myid] = cnedges;
 
+  // TODO: why not???
+  // but that's OK anyway, because in the ondisk implementation
+  //   the space will be freed soon.
   //graph_readjust_memory(cgraph,adjsize);
 
   dlthread_barrier(ctrl->comm);
@@ -290,7 +307,9 @@ static void S_par_contract_DENSE(
     dl_stop_timer(&(ctrl->timers.contraction));
   }
 
-  DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
+  // Note: the check.c utilities will be unavailable for quite some time
+  // because they require a total rewrite
+  // DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
 }
 
 
@@ -350,10 +369,14 @@ static void S_par_contract_CLS(
     cnedges += l;
   }
 
+/*
+  // oh I have to implement chunks in this too
+  // or just disable this branch
   if (maxdeg > MASK_MAX_DEG) {
     S_par_contract_DENSE(ctrl,graph,mycnvtxs,gmatch,fcmap);
     return;
   }
+*/
 
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.contraction));
@@ -366,7 +389,7 @@ static void S_par_contract_CLS(
   S_adjust_cmap(graph->cmap[myid],mynvtxs,graph->dist,dist);
 
   adj_type * const mycxadj = cgraph->xadj[myid];
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges);
+  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges);   // TODO why do I have to do that again for coarser graph?
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges);
 
@@ -418,7 +441,7 @@ static void S_par_contract_CLS(
             mycadjncy[cnedges] = k;
             mycadjwgt[cnedges] = ewgt;
             htable[l] = (offset_type)(cnedges - start); 
-            ++cnedges;
+            ++cnedges;  // NOTE: this is filled sequentially too
           } else {
             i += start;
             /* search for existing edge */

@@ -88,7 +88,9 @@ static void S_launch_func(
   dwhere = dlthread_get_shmem(sizeof(*dwhere)*nthreads,ctrl->comm);
 
   /* distribute graph */
-  graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->xadj, \
+  // graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->xadj, \
+  //     arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
+  graph = par_graph_distribute(ctrl->dist,arg->nvtxs,ctrl->adjchunksize,arg->xadj, \
       arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
 
   // optimization:

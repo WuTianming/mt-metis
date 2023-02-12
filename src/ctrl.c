@@ -28,6 +28,7 @@
 ******************************************************************************/
 
 
+static size_t const DEFAULT_ADJCHUNKSIZE = -1;    // 64bit system expected
 static size_t const DEFAULT_NCUTS = 1; 
 static size_t const DEFAULT_NRUNS = 1; 
 static size_t const DEFAULT_NREFPASS = 8;
@@ -173,6 +174,7 @@ ctrl_type * ctrl_create(void)
 
   ctrl->nthreads = omp_get_max_threads();
   ctrl->seed = 0U;
+  ctrl->adjchunksize = DEFAULT_ADJCHUNKSIZE;
   ctrl->ncuts = DEFAULT_NCUTS;
   ctrl->nruns = DEFAULT_NRUNS;
   ctrl->nrefpass = DEFAULT_NREFPASS;
@@ -381,7 +383,8 @@ int ctrl_parse(
     ctrl->leafmatch = (int)options[MTMETIS_OPTION_LEAFMATCH];
   }
 
-  // TODO wtm
+  // TODO add option for adjchunks
+
   if (options[MTMETIS_OPTION_ONDISK] != MTMETIS_VAL_OFF) {
     ctrl->ondisk = (int)options[MTMETIS_OPTION_ONDISK];
   }

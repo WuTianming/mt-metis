@@ -274,6 +274,11 @@ static inline vtx_type S_cluster(
  * @return The number of coarse vertices that will be generated during
  * contraction.
  */
+/*
+ * Need to satisfy the following property for time locality:
+ *   for cu < cv, fcmap[cu] < fcmap[cv]
+ * this is always satisfied, because as `i` grows, fcmap is only *appended*
+ */
 static vtx_type S_cleanup_match(
     graph_type const * const graph,
     vtx_type * const * const gmatch,
@@ -288,7 +293,7 @@ static vtx_type S_cleanup_match(
   vtx_type const mynvtxs = graph->mynvtxs[myid];
   adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
 
-  cnvtxs = 0;
+  cnvtxs = 0;   // new sequential numbering for local vertices
   for (i=0;i<mynvtxs;++i) {
     gvtx = lvtx_to_gvtx(i,myid,graph->dist);
     DL_ASSERT(gvtx_to_lvtx(gvtx,graph->dist) == i,"Mismatch local-global " \
@@ -297,30 +302,32 @@ static vtx_type S_cleanup_match(
     if (maxidx == NULL_VTX) {
       /* match any unmatched vertices with themselves */
       gmatch[myid][i] = i;
-    } else if (maxidx < mynvtxs) {
-      if (gmatch[myid][maxidx] != i) {
-        gmatch[myid][i] = i;
+    } else if (maxidx < mynvtxs) {          // 对于内部配对节点，
+      if (gmatch[myid][maxidx] != i) {      //   假如发现 i 配对是单向的
+        gmatch[myid][i] = i;                //   则让 i 放弃配对
       }
     } else {
       nbrid = gvtx_to_tid(maxidx,graph->dist);
       lvtx = gvtx_to_lvtx(maxidx,graph->dist);
-      if (gmatch[nbrid][lvtx] != gvtx) {
+      if (gmatch[nbrid][lvtx] != gvtx) {    // 对于跨线程配对节点，假如发现 i 配对是单向的，
         /* match vertices in broken matches with themselves */
-        gmatch[myid][i] = i;
-      } else {
+        gmatch[myid][i] = i;                //   则让 i 放弃配对（配对自己）
+      } else {                              // 假如发现成功配对了，
         if (my_cvtx(gvtx,gmatch[myid][i],gxadj[myid][i+1]-gxadj[myid][i],
             gxadj[nbrid][lvtx+1]-gxadj[nbrid][lvtx])) {
-          /* use global cmap[i] id */
+          /* use global cmap[i] id */       // 则选择两个节点中的一个作为代表元记载进 fcmap
           gcmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist); 
-          fcmap[cnvtxs++] = i;
+          fcmap[cnvtxs] = i;      // first-vertex [reverse] coarse map vector
+          cnvtxs++;
         }
       }
     }
 
-    if (gmatch[myid][i] < mynvtxs && i < gmatch[myid][i]) {
+    if (gmatch[myid][i] < mynvtxs && i < gmatch[myid][i]) {   // 内部配对节点选一个代表元
       /* use global cmap[i] id */
       gcmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist); 
-      fcmap[cnvtxs++] = i;
+      fcmap[cnvtxs] = i;
+      cnvtxs++;
     }
   }
 
@@ -330,19 +337,61 @@ static vtx_type S_cleanup_match(
     --i;
     gvtx = lvtx_to_gvtx(i,myid,graph->dist);
     maxidx = gmatch[myid][i];
-    if (maxidx < mynvtxs) {
+    if (maxidx < mynvtxs) {   // i is matched to another local node
       nbrid = myid;
       lvtx = maxidx;
     } else {
       nbrid = gvtx_to_tid(maxidx,graph->dist);
       lvtx = gvtx_to_lvtx(maxidx,graph->dist);
-    }
+    } // (nbrid, lvtx) = *[the node that i is matched to]
     if (i > gmatch[myid][i] || (gmatch[myid][i] >= mynvtxs && \
         !my_cvtx(gvtx,gmatch[myid][i],gxadj[myid][i+1]-gxadj[myid][i], \
         gxadj[nbrid][lvtx+1]-gxadj[nbrid][lvtx]))) {
       gcmap[myid][i] = gcmap[nbrid][lvtx];
     }
   }
+
+  // check if fcmap maintains order
+  for (i = 1; i < cnvtxs; ++i) {
+    if (fcmap[i] < fcmap[i-1]) {
+      fprintf(stderr, "CHECK FAILED: fcmap isn't in order at %"PF_VTX_T"\n", i);
+      exit(1);
+    }
+  }
+
+  // merges must be mutual
+  for (i = 0; i < cnvtxs; ++i) {
+    vtx_type v = fcmap[i];
+    tid_type o = myid;
+    if (gmatch[o][v] == v) {
+      // matched to itself; pass
+      continue;
+    }
+
+    // check that at most 2 vertices are merged
+    vtx_type u = gmatch[o][v];
+    tid_type t = myid;
+    if (u >= mynvtxs) {
+      t = gvtx_to_tid(u, graph->dist);
+      u = gvtx_to_lvtx(u, graph->dist);
+    }
+    vtx_type vv;
+    tid_type oo = myid;
+    vv = gmatch[t][u];
+    if (vv >= graph->mynvtxs[t]) {
+      oo = gvtx_to_tid(vv,graph->dist);
+      vv = gvtx_to_lvtx(vv,graph->dist);
+    }
+    if (oo == myid && vv == v) {
+      // match[match[v]] = v; pass
+      continue;
+    }
+
+    fprintf(stderr, "match exceeds two!!\n");
+    exit(1);
+  }
+
+  fprintf(stderr, "check passed\n");
 
   return cnvtxs;
 }
@@ -497,6 +546,8 @@ static vtx_type S_coarsen_match_leaves(
     vtx_type cnvtxs,
     vtx_type const leafdegree) 
 {
+  exit(1);    // keep match_leaves flag off for now
+
   vtx_type i, k, m, l, npivot, mask;
   adj_type j, jj;
   vtx_type * ind, * hash, * id;
@@ -779,6 +830,7 @@ static vtx_type S_coarsen_match_RM(
 
   tid_type const myid = dlthread_get_id(ctrl->comm);
 
+  vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
   vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
@@ -788,86 +840,114 @@ static vtx_type S_coarsen_match_RM(
 
   /* local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
+  size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
   wgt_type const * const vwgt = gvwgt[myid];
   vtx_type const * const adjncy = gadjncy[myid];
 
+  vtx_type const * adjncy_ofst;
+  wgt_type const * adjwgt_ofst;
+  vtx_type * perm_r_ofst;
+
   DL_ASSERT_EQUALS(graph->dist.nthreads, \
       (tid_type)dlthread_get_nthreads(ctrl->comm),"%"PF_TID_T);
 
-  gcmap[myid] = perm = vtx_alloc(mynvtxs);
+  perm = vtx_alloc(mynvtxs);
 
   k = 0;
   seed = ctrl->seed + myid;
 
-  vtx_incset(perm,0,1,mynvtxs);
-  vtx_pseudo_shuffle_r(perm,mynvtxs/8,mynvtxs,&seed);
+  char fname1[1024];
+  sprintf(fname1, "dump_graph%zd_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
+  FILE *adjncy_dump = fopen(fname1, "rb");
+  if (adjncy_dump == NULL) { exit(1); }
 
-  last_unmatched=0; /* this is private but ... */
+  /* do the following for each chunk in adjncy */
+  for (int c = 0; c < chunkcnt; ++c) {
+    vtx_type chunkstart  = gchunkofst[myid][c],
+             chunkend    = gchunkofst[myid][c+1];
+    vtx_type chunknvtxs  = chunkend - chunkstart;
+    adj_type chunknedges = xadj[chunkend] - xadj[chunkstart];
+    adjncy_ofst = adjncy - chunkstart;
+    perm_r_ofst = perm + chunkstart;
 
-  match = gmatch[myid];
+    // populate adjncy arrays for current chunk
+    fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
 
-  for (pi=0; pi<mynvtxs;++pi) {
-    /* request my matches */
-    i = perm[pi];
+    vtx_incset(perm_r_ofst,chunkstart,1,chunknvtxs);
+    vtx_pseudo_shuffle_r(perm_r_ofst,chunknvtxs/8,chunknvtxs,&seed);
 
-    if (match[i] == NULL_VTX) { /* Unmatched */
-      gvtx = lvtx_to_gvtx(i,myid,graph->dist);
-      maxidx = gvtx;
-      
-      if (vwgt[i] < maxvwgt) {
-        /* Deal with island vertices. Match locally */
-        if (xadj[i+1] == xadj[i]) { 
-          last_unmatched = dl_max(pi, last_unmatched)+1;
-          for (; last_unmatched<mynvtxs; last_unmatched++) {
-            k = perm[last_unmatched];
-            if (match[k] == NULL_VTX) {
-              maxidx = lvtx_to_gvtx(k,myid,graph->dist);
-              break;
+    last_unmatched=0; /* this is private but ... */
+
+    match = gmatch[myid];
+
+    for (pi=0; pi<chunknvtxs;++pi) {
+      /* request my matches */
+      i = perm_r_ofst[pi];
+
+      if (match[i] == NULL_VTX) { /* Unmatched */
+        gvtx = lvtx_to_gvtx(i,myid,graph->dist);
+        maxidx = gvtx;
+        
+        if (vwgt[i] < maxvwgt) {
+          /* Deal with island vertices. Match locally */
+          if (xadj[i+1] == xadj[i]) { 
+            last_unmatched = dl_max(pi, last_unmatched)+1;
+            for (; last_unmatched<chunknvtxs; last_unmatched++) {
+              k = perm_r_ofst[last_unmatched];
+              if (match[k] == NULL_VTX) {
+                maxidx = lvtx_to_gvtx(k,myid,graph->dist);
+                break;              // only match this one, and stop
+              }
             }
+          } else {    // not an island
+            // start is an arbitrary edge starting from i
+            start = (pi+xadj[i]) % (xadj[i+1]-xadj[i]) + xadj[i];
+            j = start;
+            do {
+              k = adjncy_ofst[j];
+              if (k < mynvtxs) {
+                lvtx = k;
+                nbrid = myid;
+              } else {
+                nbrid = gvtx_to_tid(k,graph->dist);
+                lvtx = gvtx_to_lvtx(k,graph->dist);
+              }
+              if (vwgt[i]+gvwgt[nbrid][lvtx] <= maxvwgt && 
+                  (gmatch[nbrid][lvtx] == NULL_VTX)) {
+                maxidx = k;
+                break;
+              }
+              ++j;
+              if (j == xadj[i+1]) {
+                j = xadj[i];
+              }
+            } while (j != start);
           }
+        }
+        if (maxidx < mynvtxs) {
+          match[i] = maxidx;
+          match[maxidx] = i;
         } else {
-          /* Find a heavy-edge matching, subject to maxvwgt constraints */
-          start = (pi+xadj[i]) % (xadj[i+1]-xadj[i]) + xadj[i];
-          j = start;
-          do {
-            k = adjncy[j];
-            if (k < mynvtxs) {
-              lvtx = k;
-              nbrid = myid;
-            } else {
-              nbrid = gvtx_to_tid(k,graph->dist);
-              lvtx = gvtx_to_lvtx(k,graph->dist);
-            }
-            if (vwgt[i]+gvwgt[nbrid][lvtx] <= maxvwgt && 
-                (gmatch[nbrid][lvtx] == NULL_VTX)) {
-              maxidx = k;
-              break;
-            }
-            ++j;
-            if (j == xadj[i+1]) {
-              j = xadj[i];
-            }
-          } while (j != start);
+          nbrid = gvtx_to_tid(maxidx,graph->dist);
+          lvtx = gvtx_to_lvtx(maxidx,graph->dist);
+          if (gvtx < maxidx) {
+            match[i] = maxidx;
+            gmatch[nbrid][lvtx] = gvtx;
+          } else if (gvtx > maxidx) {
+            gmatch[nbrid][lvtx] = gvtx;
+            match[i] = maxidx;
+          }
         }
       }
-      if (maxidx < mynvtxs) {
-        match[i] = maxidx;
-        match[maxidx] = i;
-      } else {
-        nbrid = gvtx_to_tid(maxidx,graph->dist);
-        lvtx = gvtx_to_lvtx(maxidx,graph->dist);
-        if (gvtx < maxidx) {
-          match[i] = maxidx;
-          gmatch[nbrid][lvtx] = gvtx;
-        } else if (gvtx > maxidx) {
-          gmatch[nbrid][lvtx] = gvtx;
-          match[i] = maxidx;
-        }
-      }
-    }
-  } /* outer match loop */
+    } /* outer match loop */
+  }
+
+  fclose(adjncy_dump);
+
   dlthread_barrier(ctrl->comm);
+
+  gcmap[myid] = perm;
 
   cnvtxs = S_cleanup_match(graph,gmatch,gcmap,fcmap);
 
@@ -875,7 +955,7 @@ static vtx_type S_coarsen_match_RM(
 }
 
 
-/*
+/**
  * @brief Match the vertices in a graph using attempting to match across the
  * heaviest edges.
  *
@@ -890,7 +970,7 @@ static vtx_type S_coarsen_match_RM(
 static vtx_type S_coarsen_match_SHEM(
     ctrl_type * const ctrl, 
     graph_type const * const graph,
-    vtx_type * const * const gmatch, 
+    vtx_type * const * const gmatch,  // output
     vtx_type * const fcmap) 
 {
   unsigned int seed;
@@ -907,6 +987,7 @@ static vtx_type S_coarsen_match_SHEM(
 
   wgt_type const maxvwgt  = ctrl->maxvwgt;
 
+  vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
   vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
@@ -914,73 +995,110 @@ static vtx_type S_coarsen_match_SHEM(
 
   /* thread local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
+  size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
   vtx_type const * const adjncy = gadjncy[myid];
   wgt_type const * const vwgt = gvwgt[myid];
   wgt_type const * const adjwgt = gadjwgt[myid];
   vtx_type * const match = gmatch[myid];
 
+  vtx_type const * adjncy_ofst;
+  wgt_type const * adjwgt_ofst;
+  vtx_type * degree_ofst;
+  vtx_type * perm_r_ofst;
+
   /* matching vectors */
 
   k = 0;
   cnvtxs = 0;
 
-  /* calculate the degree of each vertex, truncating to the average */
+  char fname1[1024], fname2[1024];
+  sprintf(fname1, "dump_graph%zd_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
+  sprintf(fname2, "dump_graph%zd_dadjwgt_tid%"PF_TID_T".bin", graph->level, myid);
+  FILE *adjncy_dump = fopen(fname1, "rb");
+  FILE *adjwgt_dump = fopen(fname2, "rb");
+  if (adjncy_dump == NULL) { exit(1); }
+  if (adjwgt_dump == NULL) { exit(1); }
+
   if (mynvtxs > 0) {
     perm = vtx_alloc(mynvtxs);
-    tperm = vtx_alloc(mynvtxs);
-    degrees = vtx_alloc(mynvtxs);
+  } else {
+    perm = NULL;
+  }
 
-    avgdegree = (0.7*(graph->mynedges[myid]/mynvtxs))+1;
-    for (i=0;i<mynvtxs;++i) {
+  /* do the following for each chunk in adjncy */
+  for (int c = 0; c < chunkcnt; ++c) {
+    vtx_type chunkstart  = gchunkofst[myid][c],
+             chunkend    = gchunkofst[myid][c+1];
+    vtx_type chunknvtxs  = chunkend - chunkstart;
+    adj_type chunknedges = xadj[chunkend] - xadj[chunkstart];
+    adjncy_ofst = adjncy - chunkstart;
+    adjwgt_ofst = adjwgt - chunkstart;
+    perm_r_ofst = perm + chunkstart;
+
+    // populate adjncy and adjwgt arrays for current chunk
+    fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
+    fread(adjwgt, sizeof(wgt_type), chunknedges, adjwgt_dump);
+
+    /* calculate the degree of each vertex, truncating to the average */
+    tperm = vtx_alloc(chunknvtxs);
+    degrees = vtx_alloc(chunknvtxs);
+    degree_ofst = degrees - chunkstart;     /* avoid having to do offsets in each iteration */ 
+
+    avgdegree = (0.7*(chunknedges/chunknvtxs))+1;
+    for (i=chunkstart;i<chunkend;++i) {
       j = xadj[i+1] - xadj[i];
-      degrees[i] = (j > avgdegree ? avgdegree : j);
+      degree_ofst[i] = (j > avgdegree ? avgdegree : j);
     }
 
     /* create a pre-permutation array */
-    vtx_incset(tperm,0,1,mynvtxs);
+    /* Note: this is a permutation of [chunkstart, chunkend) */
+    vtx_incset(tperm,chunkstart,1,chunknvtxs);
 
     /* shuffle permutation array and degrees the same */
     seed = ctrl->seed + myid;
-    vtx_pseudo_shuffle_r(tperm,mynvtxs/8,mynvtxs,&seed);
+    vtx_pseudo_shuffle_r(tperm,chunknvtxs/8,chunknvtxs,&seed);
     seed = ctrl->seed + myid;
-    vtx_pseudo_shuffle_r(degrees,mynvtxs/8,mynvtxs,&seed);
+    vtx_pseudo_shuffle_r(degrees,chunknvtxs/8,chunknvtxs,&seed);
 
     DL_ASSERT_EQUALS(degrees[0], \
         dl_min(avgdegree,xadj[tperm[0]+1]-xadj[tperm[0]]),"%"PF_ADJ_T);
 
     /* create permutation */
-    vv_countingsort_kv(degrees,tperm,0,avgdegree,mynvtxs,perm,NULL);
+    vv_countingsort_kv(degrees,tperm,0,avgdegree,chunknvtxs,perm_r_ofst,NULL);
+    // perm = sort(tperm, key=degrees[ascending])
+    // TODO: why shuffle?
 
-    DL_ASSERT(mynvtxs < 2 || dl_min(xadj[perm[0]+1] - xadj[perm[0]],avgdegree) \
-        <= xadj[perm[mynvtxs-1]+1] - xadj[perm[mynvtxs-1]],"Sorting failed\n");
+    DL_ASSERT(chunknvtxs < 2 || dl_min(xadj[perm_r_ofst[0]+1] - xadj[perm_r_ofst[0]],avgdegree) \
+        <= xadj[perm_r_ofst[chunknvtxs-1]+1] - xadj[perm_r_ofst[chunknvtxs-1]],"Sorting failed\n");
 
     /* free scratch space */
     dl_free(tperm);
     dl_free(degrees);
-  } else {
-    perm = NULL;
-  }
 
-  last_unmatched=0; 
+    // now perm = sort(0~chunknvtxs-1, key=degrees[ascending])
 
-  for (pi=0; pi<mynvtxs;++pi) {
-    /* request my matches */
-    i = perm[pi];
-      
-    if (match[i] == NULL_VTX) {  /* Unmatched */
+    last_unmatched=0; 
+
+    for (pi=0; pi<chunknvtxs;++pi) {
+      /* request my matches. match[] is inter-chunk intra-thread */
+      i = perm_r_ofst[pi];   // i is in [chunkstart, chunkend)
+
+      if (match[i] != NULL_VTX) { continue; }
+
+      /* Unmatched */
       mywgt = vwgt[i];
       maxwgt = 0;
       gvtx = lvtx_to_gvtx(i,myid,graph->dist);
       maxidx = gvtx;
 
-      if (mywgt < maxvwgt) {
-        /* Deal with island vertices. Find a non-island and match it with. 
-           The matching ignores ctrl->maxvwgt requirements */
+      if (mywgt < maxvwgt) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
         if (xadj[i+1] == xadj[i]) { 
+          /* Deal with island vertices. Find a non-island and match it with. 
+              The matching ignores ctrl->maxvwgt requirements */
           last_unmatched = dl_max(pi, last_unmatched)+1;
-          for (; last_unmatched<mynvtxs; last_unmatched++) {
-            k = perm[last_unmatched];
+          for (; last_unmatched<chunknvtxs; last_unmatched++) {
+            k = perm_r_ofst[last_unmatched];
             if (match[k] == NULL_VTX) {
               maxidx = k;
               break;
@@ -989,8 +1107,8 @@ static vtx_type S_coarsen_match_SHEM(
         } else {
           /* Find a heavy-edge matching, subject to maxvwgt constraints */
           for (j=xadj[i]; j<xadj[i+1]; ++j) {
-            k = adjncy[j];
-            ewgt = adjwgt[j];
+            k = adjncy_ofst[j];
+            ewgt = adjwgt_ofst[j];
             if (k < mynvtxs) {
               lvtx = k;
               nbrid = myid;
@@ -1004,29 +1122,35 @@ static vtx_type S_coarsen_match_SHEM(
               maxidx = k;
               maxwgt = ewgt;
             }
-          }
-        }
-      }
+          } // for (j in adj[i])
+        } // if (xadj[i+1] != xadj[i])
+      } // if (mywgt < maxvwgt)
+
       /* handle unmatched vertices later */
       if (maxidx < mynvtxs) {
         match[i] = maxidx;
-        match[maxidx] = i;
+        match[maxidx] = i;    // 互相 match，对于本地节点来说没有问题
       } else {
+        // 互相 match 过程对于远程节点可能会造成时序问题，但这里 optimistic
         nbrid = gvtx_to_tid(maxidx,graph->dist);
         lvtx = gvtx_to_lvtx(maxidx,graph->dist);
-        if (gvtx < maxidx) {
-          match[i] = maxidx;
+        if (gvtx < maxidx) {    // gvtx 是自己节点的全局编号，比较大小表示比较线程编号0
+          match[i] = maxidx;    // match === gmatch[myid]
           gmatch[nbrid][lvtx] = gvtx;
         } else if (gvtx > maxidx) {
           gmatch[nbrid][lvtx] = gvtx;
-          match[i] = maxidx;
-        }
+          match[i] = maxidx;    // match === gmatch[myid]
+        } // come on! there is no difference!??
       }
-    }
-  } /* outer match loop */
+    } /* for each v in current chunk */
+  }
+
+  fclose(adjncy_dump);
+  fclose(adjwgt_dump);
+
   dlthread_barrier(ctrl->comm);
 
-  gcmap[myid] = perm;
+  gcmap[myid] = perm;     // this array is reused later. Thanks a ton to ASAN!
 
   cnvtxs = S_cleanup_match(graph,gmatch,gcmap,fcmap);
 
@@ -1034,7 +1158,7 @@ static vtx_type S_coarsen_match_SHEM(
 }
 
 
-/*
+/**
  * @brief Cluster the vertices in a graph attempting to cluster across the
  * heaviest edges.
  *
@@ -1052,6 +1176,8 @@ static vtx_type S_coarsen_cluster_FC(
     vtx_type * const * const gmatch, 
     vtx_type * const fcmap)
 {
+  exit(1);
+
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1262,7 +1388,7 @@ static vtx_type S_coarsen_cluster_FC(
 }
 
 
-/*
+/**
  * @brief Cluster the vertices in a graph randomly across edges.
  *
  * @param ctrl The control structure specifying partitioning parameters.
@@ -1279,6 +1405,8 @@ static vtx_type S_coarsen_cluster_RC(
     vtx_type * const * const gmatch, 
     vtx_type * const fcmap) 
 {
+  exit(1);
+
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;

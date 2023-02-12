@@ -329,7 +329,7 @@ int check_graph(
   for (myid=0;myid<graph->dist.nthreads;++myid) {
     mynvtxs = graph->mynvtxs[myid];
     xadj = graph->xadj[myid];
-    adjncy = graph->adjncy[myid];
+    adjncy = graph->adjncy[myid];     // TODO: change check function for the new structure
     adjwgt = graph->adjwgt[myid];
     tvwgt += wgt_lsum(graph->vwgt[myid],mynvtxs);
     tadjwgt += wgt_lsum(graph->adjwgt[myid],xadj[mynvtxs]);
