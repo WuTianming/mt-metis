@@ -459,6 +459,21 @@ void par_graph_setup_twgts(
     graph_type * graph);
 
 
+#define par_chunk_graph_setup_twgts MTMETIS_par_chunk_graph_setup_twgts
+/**
+ * @brief Calculate and save the twgts of a new graph, but asum
+ * can be directly specified. This is done because accessing
+ * adjwgt would require disk reads for chunked version, and it is
+ * better to just pre-calculate asum (adjwgt sum) when doing contractions.
+ *
+ * @param graph The graph.
+ * @param asum Pre-calculated adjwgt sum.
+ */
+void par_chunk_graph_setup_twgts(
+    graph_type * const graph,
+    twgt_type asum);
+
+
 #define par_graph_alloc_partmemory MTMETIS_par_graph_alloc_partmemory
 /**
  * @brief Allocate memory for partition informatin.

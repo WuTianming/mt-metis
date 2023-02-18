@@ -18,7 +18,8 @@
 
 #include "coarsen.h"
 #include "aggregate.h"
-#include "contract.h"
+// #include "contract.h"
+#include "contract_chunk.h"
 #include "check.h"
 
 
@@ -54,11 +55,11 @@ graph_type * par_coarsen_graph(
   fcmap = vtx_alloc(graph->mynvtxs[myid]);
   match = vtx_init_alloc(NULL_VTX,graph->mynvtxs[myid]);
 
-  DL_ASSERT(check_graph(graph),"Invalid graph");
+  // DL_ASSERT(check_graph(graph),"Invalid graph");
 
   gmatch = dlthread_get_shmem(sizeof(vtx_type*)*nthreads,ctrl->comm);
 
-  gmatch[myid] = match;
+  gmatch[myid] = match;   // distributed initialization
 
   par_vprintf(ctrl->verbosity,MTMETIS_VERBOSITY_HIGH,"Graph{%zu} has %" \
       PF_VTX_T"[%"PF_VTX_T"] vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
@@ -81,16 +82,16 @@ graph_type * par_coarsen_graph(
   }
   dlthread_barrier(ctrl->comm);
 
-  cnvtxs = par_aggregate_graph(ctrl,graph,gmatch,fcmap);
+  cnvtxs = par_aggregate_graph(ctrl,graph,gmatch,fcmap);    // find a match
 
-  par_contract_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
+  par_contract_chunk_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
 
   dlthread_free_shmem(gmatch,ctrl->comm);
 
   dl_free(fcmap);
   dl_free(match);
 
-  DL_ASSERT(check_graph(graph->coarser),"Invalid graph");
+  // DL_ASSERT(check_graph(graph->coarser),"Invalid graph");
 
   if (myid == 0) {
     dl_stop_timer(&ctrl->timers.coarsening);

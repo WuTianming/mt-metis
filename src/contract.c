@@ -230,7 +230,7 @@ static void S_par_contract_DENSE(
     DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist),
         graph->dist),"%"PF_TID_T);
     do {    // traverse all original vertices (o in v) for this coarse vertex c
-      DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],dist),"%"PF_VTX_T);
+      DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
       mycvwgt[c] += gvwgt[o][v];

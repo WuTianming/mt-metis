@@ -1269,7 +1269,7 @@ static void S_par_distribute_block(
   mynvtxs[myid] = vtxdist[myid+1] - vtxdist[myid];
 
   /* further divide to make chunks */
-  chunkcnt[myid] = (mynedges[myid] - 1) / (adjchunksize/sizeof(adj_type)) + 1;
+  chunkcnt[myid] = (mynedges[myid] - 1) / adjchunksize + 1;
   size_t nchunks = chunkcnt[myid];
   chunkofst[myid] = vtx_alloc(chunkcnt[myid] + 1);
   chunkofst[myid][0] = 0;
@@ -2321,6 +2321,34 @@ void par_graph_setup_twgts(
       asum += graph->adjwgt[myid][j];
     }
     asum = twgt_dlthread_sumreduce(asum,graph->comm);
+  }
+ 
+  if (myid == 0) {
+    graph->tvwgt = vsum;
+    graph->tadjwgt = asum;
+    graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
+  }
+  dlthread_barrier(graph->comm);
+}
+
+void par_chunk_graph_setup_twgts(
+    graph_type * const graph,
+    twgt_type asum)
+{
+  vtx_type i;
+  adj_type j;
+  twgt_type vsum;
+
+  tid_type const myid = dlthread_get_id(graph->comm);
+
+  if (graph->uniformvwgt) {
+    vsum = graph->nvtxs;
+  } else {
+    vsum = 0;
+    for (i=0;i<graph->mynvtxs[myid];++i) {
+      vsum += graph->vwgt[myid][i];
+    }
+    vsum = twgt_dlthread_sumreduce(vsum,graph->comm);
   }
 
   if (myid == 0) {
@@ -3558,6 +3586,8 @@ graph_type * par_graph_distribute(
 
   graph = par_graph_create(comm);
 
+  graph->uniformadjwgt = 1;
+
   owner = dlthread_get_shmem((sizeof(*owner)*nvtxs) + \
       (sizeof(*rename)*nvtxs),comm);
   rename = (vtx_type*)(owner + nvtxs);
@@ -3640,6 +3670,7 @@ graph_type * par_graph_distribute(
       // dump dadjncy into file
       size_t chunklen = l;
       fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
+      fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunklen, fname1);
       fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
 
       // then switch to next chunk
@@ -3678,6 +3709,14 @@ graph_type * par_graph_distribute(
     dxadj[myid][v+1] = l + chunkstart;
   }
   dmynedges[myid] = dxadj[myid][mynvtxs];
+
+  if (l > 0) {
+    // dump dadjncy into file
+    size_t chunklen = l;
+    fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
+    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunklen, fname1);
+    fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
+  }
   fclose(dadjncy_dump);
   fclose(dadjwgt_dump);
 

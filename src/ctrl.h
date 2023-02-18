@@ -58,7 +58,7 @@ typedef struct ctrl_type {
   int vwgtdegree;
   int ignore;
   /* adjacency lists are resident in memory one chunk at once for each thread */
-  size_t adjchunksize;    /* in bytes */
+  size_t adjchunksize;    /* count */
   /* thread communication structures */
   dlthread_comm_t comm;
   /* partitioning parameters */
