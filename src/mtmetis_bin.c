@@ -164,11 +164,14 @@ static const cmd_opt_t OPTS[] = {
       "for assigning vertices to threads (default=blockcyclic).", \
       CMD_OPT_CHOICE,DISTRIBUTION_CHOICES,S_ARRAY_SIZE(DISTRIBUTION_CHOICES)},
   {MTMETIS_OPTION_UBFACTOR,'b',"balance","The balance constraint " \
-      "(default=1.03, which means allowing for a 3% imbalance).", \
+      "(default=1.03, which means allowing for a 3%% imbalance).", \
       CMD_OPT_FLOAT,NULL,0},
   {MTMETIS_OPTION_ONDISK,'o',"ondisk","Store graphs to disk " \
       "during coarsening in order to reduce memory requirements (default=true).", \
       CMD_OPT_BOOL,NULL,0},
+  {MTMETIS_OPTION_ADJCHUNKSIZE,'K',"chunk","Chunk size (in Mega-edges). Only one " \
+      "chunk of all edges at a time resident in memory (default=unlimited).", \
+      CMD_OPT_INT,NULL,0},
   {MTMETIS_OPTION_PTYPE,'p',"ptype","The type of partition to compute " \
       "(default=kway)",CMD_OPT_CHOICE,PTYPE_CHOICES, \
       S_ARRAY_SIZE(PTYPE_CHOICES)},
@@ -331,7 +334,49 @@ static double * S_parse_args(
   return NULL;
 }
 
+/* calculate statistics to show if edge count is balanced */
+/* NOTE: this shouldn't be included in a git commit */
+void count_total_deg_of_part(int argc, char ** argv) {
+  vtx_type nvtxs, i;
+  adj_type * xadj = NULL; vtx_type * adjncy = NULL;
+  wgt_type * vwgt = NULL, * adjwgt = NULL;
 
+  char const * input_file = NULL, * input_parts = NULL;
+  input_file = argv[1];
+  printf("reading input graph file %s...\n", input_file);
+  int rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy,&vwgt,&adjwgt);
+  printf("stats: nvtxs = %"PF_VTX_T"\n", nvtxs);
+
+  input_parts = argv[2];
+  printf("reading input parts file %s...\n", input_parts);
+  FILE *fparts = fopen(input_parts, "r");
+
+#define DEG(k) (xadj[(k)+1] - xadj[(k)])
+
+  int part;
+  long long total[16];
+  memset(total, 0, sizeof(total));
+  for (size_t i = 0; i < nvtxs; ++i) {
+    fscanf(fparts, "%d", &part);
+    total[part] += DEG(i);
+  }
+
+  long long mx = 0;
+  double avg = 0;
+  for (int i = 0; i < 8; ++i) {
+    printf("%lld ", total[i]);
+    if (total[i] > mx) mx = total[i];
+    avg += total[i];
+  }
+  printf("\n");
+  avg /= 8;
+  printf("avg = %.1lf, max = %lld\n", avg, mx);
+  printf("max/avg = %.3lf\n", mx / avg);
+
+#undef DEG
+
+  exit(0);
+}
 
 
 /******************************************************************************
@@ -343,6 +388,8 @@ int main(
     int argc, 
     char ** argv) 
 {
+  // count_total_deg_of_part(argc, argv);
+
   int rv, times, verbosity;
   size_t nargs;
   vtx_type nvtxs, i;

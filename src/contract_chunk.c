@@ -397,8 +397,13 @@ static void S_par_contract_CLS_quadratic(
   adj_type * const mycxadj = cgraph->xadj[myid];
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
 
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(ctrl->adjchunksize*1.1);
-  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(ctrl->adjchunksize*1.1);
+  size_t adjncy_chunksize = /* take min */
+      ctrl->adjchunksize > gxadj[myid][gchunkofst[myid][1]] * 2
+          ? gxadj[myid][gchunkofst[myid][1]] * 2
+          : ctrl->adjchunksize * 1.1;
+
+  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
+  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
   size_t   * cchunkcnt = cgraph->chunkcnt; cchunkcnt[myid] = 1;
   size_t   * pchunkcnt = cchunkcnt + myid;
@@ -445,8 +450,8 @@ static void S_par_contract_CLS_quadratic(
    *   barrier();
   */
 
-  vtx_type * const local_adjncy = vtx_alloc(ctrl->adjchunksize*1.1);
-  wgt_type * const local_adjwgt = wgt_alloc(ctrl->adjchunksize*1.1);
+  vtx_type * const local_adjncy = vtx_alloc(adjncy_chunksize);
+  wgt_type * const local_adjwgt = wgt_alloc(adjncy_chunksize);
 
   // vtx_type ** dlocal_adjncy = dlthread_get_shmem(sizeof(vtx_type*)*nthreads, graph->comm);
 
@@ -465,18 +470,24 @@ static void S_par_contract_CLS_quadratic(
     adj_type cc1adjstart = gxadj[myid][cc1start], cc1adjend = gxadj[myid][cc1end];
     fseek(dadjncy_read, sizeof(vtx_type) * cc1adjstart, SEEK_SET);
     fseek(dadjwgt_read, sizeof(wgt_type) * cc1adjstart, SEEK_SET);
-    fread(local_adjncy, sizeof(vtx_type), cc1adjend - cc1adjstart, dadjncy_read);
+    fread(local_adjncy, sizeof(vtx_type), cc1adjend - cc1adjstart, dadjncy_read);   // 读的是实际长度
     fread(local_adjwgt, sizeof(wgt_type), cc1adjend - cc1adjstart, dadjwgt_read);
 
+// #define PRINT_LOOP_VAR
+
+#ifdef PRINT_LOOP_VAR
       {
         fprintf(stderr, "#%"PF_TID_T": this chunk is [%"PF_VTX_T", %"PF_VTX_T")\n", myid, cc1start, cc1end);
       }
+#endif
 
     for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
       dlthread_barrier(graph->comm);    // barrier every time before file read
+#ifdef PRINT_LOOP_VAR
       if (myid == 0) {
         fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2);
       }
+#endif
       vtx_type cc2start, cc2end;
       adj_type cc2adjstart, cc2adjend;
       if (cc2 < gchunkcnt[myid]) {
@@ -604,7 +615,9 @@ static void S_par_contract_CLS_quadratic(
         /* check if the chunk length reaches maximum */
         size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
         if (chunkadjs > ctrl->adjchunksize) {
+#ifdef PRINT_LOOP_VAR
           fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunkadjs, fout1);
+#endif
           mycchunkofst[*pchunkcnt] = c+1;
           ++*pchunkcnt;
           fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
@@ -618,7 +631,9 @@ static void S_par_contract_CLS_quadratic(
 
   size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt - 1]];
   if (chunkadjs > 0) {
+#ifdef PRINT_LOOP_VAR
     fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunkadjs, fout1);
+#endif
     mycchunkofst[*pchunkcnt] = mycnvtxs;
     fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
     fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
@@ -647,15 +662,15 @@ static void S_par_contract_CLS_quadratic(
 
   if (myid == 0) {
     for (int i = 0; i < nthreads; ++i) {
-      printf("thread %d: c=%zu; %zu: (", i, cgraph->chunkcnt[i], cgraph->mynvtxs[i]);
+      printf("thread %d: c#=%2zu; [%7zu|%9zu]: (", i, cgraph->chunkcnt[i], cgraph->mynvtxs[i], cgraph->mynedges[i]);
       for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
         printf("%" PF_VTX_T ",", cgraph->chunkofst[i][c + 1] - cgraph->chunkofst[i][c]);
       }
-      printf(")\n  edge count: (");
-      for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
-        printf("%" PF_ADJ_T ",",
-              cgraph->xadj[i][cgraph->chunkofst[i][c + 1]] - cgraph->xadj[i][cgraph->chunkofst[i][c]]);
-      }
+      // printf(")\n  edge count: (");
+      // for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
+      //   printf("%" PF_ADJ_T ",",
+      //         cgraph->xadj[i][cgraph->chunkofst[i][c + 1]] - cgraph->xadj[i][cgraph->chunkofst[i][c]]);
+      // }
       printf(")\n");
     }
     fflush(stdout);

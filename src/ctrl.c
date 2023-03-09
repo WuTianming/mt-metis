@@ -28,7 +28,12 @@
 ******************************************************************************/
 
 
-static size_t const DEFAULT_ADJCHUNKSIZE = -1;    // 64bit system expected
+static size_t const DEFAULT_ADJCHUNKSIZE = -1;
+// static size_t const DEFAULT_ADJCHUNKSIZE = (16llu << 20);
+// static size_t const DEFAULT_ADJCHUNKSIZE = (1llu << 30);  // 1 gig edges -- for papers100M
+// static size_t const DEFAULT_ADJCHUNKSIZE = 5155000;  // products corner case
+// static size_t const DEFAULT_ADJCHUNKSIZE = 1600000;
+// static size_t const DEFAULT_ADJCHUNKSIZE = 160000;
 static size_t const DEFAULT_NCUTS = 1; 
 static size_t const DEFAULT_NRUNS = 1; 
 static size_t const DEFAULT_NREFPASS = 8;
@@ -384,6 +389,9 @@ int ctrl_parse(
   }
 
   // TODO add option for adjchunks
+  if (options[MTMETIS_OPTION_ADJCHUNKSIZE] != MTMETIS_VAL_OFF) {
+    ctrl->adjchunksize = (size_t)options[MTMETIS_OPTION_ADJCHUNKSIZE] * 1024 * 1024;
+  }
 
   if (options[MTMETIS_OPTION_ONDISK] != MTMETIS_VAL_OFF) {
     ctrl->ondisk = (int)options[MTMETIS_OPTION_ONDISK];

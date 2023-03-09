@@ -1384,6 +1384,10 @@ static void S_par_distribute_blockcyclic(
     vtx_type * const rename,
     tid_type * const owner,
     vtx_type const block,
+
+    // size_t   * const chunkcnt,
+    // vtx_type ** const chunkofst,
+
     dlthread_comm_t const comm)
 {
   exit(1);    // disabled for debugging
@@ -3636,14 +3640,16 @@ graph_type * par_graph_distribute(
   graph_calc_dist(vtx_max_value(dmynvtxs,nthreads),nthreads,&dist);
 
   /* allocate arrays */
+  size_t adjncy_chunksize =
+      adjchunksize > dmynedges[myid] ? dmynedges[myid] : adjchunksize * 1.1;
   mynvtxs = dmynvtxs[myid];
   dxadj[myid] = adj_alloc(mynvtxs+1);
   dxadj[myid][0] = 0;
   // dadjncy[myid] = vtx_alloc(dmynedges[myid]);   // chunks! shouldn't allocate this much
-  dadjncy[myid] = vtx_alloc(adjchunksize*1.1);     // FIXME: 解决二分区块不精确的问题, max(chunksize[myid])
+  dadjncy[myid] = vtx_alloc(adjncy_chunksize);     // FIXME: 解决二分区块不精确的问题, max(chunksize[myid])
   dvwgt[myid] = wgt_alloc(mynvtxs);
   // dadjwgt[myid] = wgt_alloc(dmynedges[myid]);   // TODO chunks
-  dadjwgt[myid] = wgt_alloc(adjchunksize*1.1);
+  dadjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
   /* zero counts for insertion later */
   dmynedges[myid] = 0;
@@ -3679,6 +3685,7 @@ graph_type * par_graph_distribute(
       ++mynowchunk;
     }
     for (j=xadj[i];j<xadj[i+1];++j) {
+      /** LOCALITY preserved with block distribution */
       /* usually this requires random reads in adjncy; but
          for `block` distribution, adjncy is always read sequentially. */
       // fetch_adjncy_chunk(mynowchunk)
@@ -3756,7 +3763,7 @@ graph_type * par_graph_distribute(
     printf("graph distribution done...\n");
     vtx_type mx = 0;
     for (int i = 0; i < nthreads; ++i) {
-      printf("thread %d: c=%zu; %zu: (", i, dchunkcnt[i], dmynvtxs[i]);
+      printf("thread %d: c#=%2zu; [%7zu|%9zu]: (", i, dchunkcnt[i], dmynvtxs[i], dmynedges[i]);
       for (int c = 0; c < dchunkcnt[i]; ++c) {
         printf("%"PF_VTX_T",", dchunkofst[i][c+1] - dchunkofst[i][c]);
       }

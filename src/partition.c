@@ -186,7 +186,12 @@ static void test_func(
     ctrl_type * const ctrl,
     graph_type * const graph) {
   int myid = dlthread_get_id(ctrl->comm);
-  printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", (int)(graph_size(graph) >> 20), graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
+  // printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", (int)(graph_size(graph) >> 20), graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
+  int maxchunkcnt = 0;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    dl_storemax(maxchunkcnt, graph->chunkcnt[i]);
+  }
+  printf("testf[%03d]: %6dMB, %d, %d, %lld\n", maxchunkcnt, (int)(graph_size(graph) >> 20), (int)graph->mynvtxs[myid], (int)graph->nvtxs, (long long)graph->nedges);
 }
 
 static wgt_type S_par_partition_mlevel(
@@ -220,6 +225,13 @@ static wgt_type S_par_partition_mlevel(
         "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
         " exposed edge weight.\n",graph->level,graph->nvtxs, \
         graph->nedges,graph->tadjwgt);
+    fprintf(stderr,"Coarsest graph{%zu} " \
+        "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
+        " exposed edge weight.\n",graph->level,graph->nvtxs, \
+        graph->nedges,graph->tadjwgt);
+    
+    while (1);
+    dlthread_barrier(graph->comm);
 
     switch (ctrl->ptype) {
       case MTMETIS_PTYPE_ND:
@@ -261,6 +273,7 @@ static wgt_type S_par_partition_mlevel(
     dlthread_barrier(ctrl->comm);
     if (dlthread_get_id(ctrl->comm) == 0)
       test_func(ctrl, graph);     // TODO clean up
+    dlthread_barrier(ctrl->comm);
   }
 
   /* uncoarsen this level */

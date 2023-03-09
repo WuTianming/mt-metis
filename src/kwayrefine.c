@@ -259,7 +259,7 @@ static wgt_type S_update_vertex(
 }
 
 
-static wgt_type S_move_vertex(
+static wgt_type S_move_vertex(      // uses combuffer_add
     ctrl_type * const ctrl,
     graph_type * const graph,
     tid_type const myid,
@@ -477,7 +477,7 @@ static wgt_type S_update_vertex_PW(
 }
 
 
-static wgt_type S_move_vertex_PW(
+static wgt_type S_move_vertex_PW(   // unrelated
     ctrl_type * const ctrl,
     graph_type * const graph,
     tid_type const myid,
@@ -806,7 +806,7 @@ static inline void S_par_sync_pwgts(
 }
 
 
-static vtx_type S_pfm(
+static vtx_type S_pfm(    // unrelated
     ctrl_type * const ctrl,
     graph_type * const graph,
     kwinfo_type * const * const gkwinfo,
@@ -1541,7 +1541,7 @@ static vtx_type S_par_kwayrefine_HS(
 }
 
 
-static vtx_type S_par_kwayrefine_KPM(
+static vtx_type S_par_kwayrefine_KPM(   // unrelated
     ctrl_type * const ctrl, 
     graph_type * const graph,
     size_t const niter, 
@@ -1732,7 +1732,7 @@ vtx_type par_kwayrefine(
   nmoves = 0;
 
   switch (ctrl->rtype) {
-    case MTMETIS_RTYPE_GREEDY:
+    case MTMETIS_RTYPE_GREEDY:    // this is the default for kway
       nmoves = S_par_kwayrefine_GREEDY(ctrl,graph,ctrl->nrefpass,kwinfo);
       break;
     case MTMETIS_RTYPE_HS:

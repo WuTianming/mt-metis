@@ -40,7 +40,7 @@
 
 
 typedef struct DLLCB_PRI(node_t) {
-  DLLCB_TYPE_T val;
+  DLLCB_TYPE_T val;         // move_type = (part to_which, vtx vertex)
   struct DLLCB_PRI(node_t) * next;
 } DLLCB_PRI(node_t);
 
@@ -53,11 +53,11 @@ typedef struct DLLCB_PRI(list_t) {
 
 
 typedef struct DLLCB_PRI(info_t) {
-  int volatile finished;
+  int volatile finished;    // 看着就像是一个 polling 的队列结构。。
   int volatile active;
   size_t maxmsgs;
   size_t lastmsg;
-  DLLCB_PRI(node_t) * nodes;
+  DLLCB_PRI(node_t) * nodes;    // this is a linked list
   /* ensure the structure is 64 bytes to avoid false sharing */
   char _padding[CACHE_LINE_SIZE - \
       (sizeof(int)*2+sizeof(size_t)*2+sizeof(void*))];
