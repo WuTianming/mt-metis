@@ -344,9 +344,9 @@ static void S_par_contract_CLS_quadratic(
   size_t   const * const gchunkcnt = graph->chunkcnt;
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const * const *)graph->adjncy;   // TODO
+  vtx_type const * const * const gadjncy = (vtx_type const * const *)graph->adjncy;
   wgt_type const * const * const gvwgt = (wgt_type const * const *)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const * const *)graph->adjwgt;   // TODO
+  wgt_type const * const * const gadjwgt = (wgt_type const * const *)graph->adjwgt;
 
   vtx_type const * const * const gcmap = (vtx_type const **)graph->cmap;
 
@@ -388,7 +388,7 @@ static void S_par_contract_CLS_quadratic(
     dl_start_timer(&(ctrl->timers.contraction));
   }
 
-  cgraph = par_graph_setup_coarse(graph,mycnvtxs);    // TODO 可能有遗漏的没有初始化的东西
+  cgraph = par_graph_setup_coarse(graph,mycnvtxs);
 
   cdist = cgraph->dist;
 
@@ -563,11 +563,11 @@ static void S_par_contract_CLS_quadratic(
               /* external edge */
               l = k&MASK;
               i = htable[l];
-              // ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];    // TODO access
               ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
               if (i == NULL_OFFSET) {
                 /* new edge */
-                // TODO write and allocate
+                // TODO because this is filled sequentially, we can just call
+                // fwrite without manually buffering with `mycadjncy`
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 adjwgt_sum += ewgt;
@@ -577,8 +577,7 @@ static void S_par_contract_CLS_quadratic(
                 i += start;
                 /* search for existing edge */
                 for (jj=i;jj<cnedges;++jj) {
-                  if (pcadjncy[jj] == k) {
-                    // mycadjwgt[jj] += ewgt;
+                  if (pcadjncy[jj] == k) {    // FIXME: we only need to store the edges of one cnode
                     pcadjwgt[jj] += ewgt;
                     adjwgt_sum += ewgt;
                     break;
@@ -586,6 +585,7 @@ static void S_par_contract_CLS_quadratic(
                 }
                 if (jj == cnedges) {
                   /* we didn't find the edge, so add it */
+                  // TODO call fwrite directly
                   pcadjncy[cnedges] = k;
                   pcadjwgt[cnedges] = ewgt;
                   adjwgt_sum += ewgt;

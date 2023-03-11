@@ -1207,15 +1207,12 @@ static tid_type S_par_graph_extract_halves_group(
  */
 static void S_par_distribute_block(
     vtx_type const nvtxs,
-    size_t   const adjchunksize,
     adj_type const * const xadj,
     vtx_type * const mynvtxs,
     adj_type * const mynedges,
     vtx_type ** const label,
     vtx_type * const rename,
     tid_type * const owner,
-    size_t   * const chunkcnt,
-    vtx_type ** const chunkofst,
     dlthread_comm_t const comm)
 {
   vtx_type i, v, chunkstart, chunkend;
@@ -1267,19 +1264,6 @@ static void S_par_distribute_block(
 
   mynedges[myid] = prefixsum[vtxdist[myid+1]] - prefixsum[vtxdist[myid]];
   mynvtxs[myid] = vtxdist[myid+1] - vtxdist[myid];
-
-  /* further divide to make chunks */
-  chunkcnt[myid] = (mynedges[myid] - 1) / adjchunksize + 1;
-  size_t nchunks = chunkcnt[myid];
-  chunkofst[myid] = vtx_alloc(chunkcnt[myid] + 1);
-  chunkofst[myid][0] = 0;
-
-  adj_type * myprefixsum = prefixsum+vtxdist[myid];
-  for (int c = 0; c < nchunks; ++c) {
-    adj_type target = myprefixsum[0] + ((mynedges[myid]+(nchunks-1))/nchunks)*(c+1);
-    vtx_type ofst = adj_binarysearch(myprefixsum, target, mynvtxs[myid]+1);
-    chunkofst[myid][c+1] = ofst;
-  }
 
   label[myid] = vtx_alloc(mynvtxs[myid]);
 
@@ -1384,14 +1368,8 @@ static void S_par_distribute_blockcyclic(
     vtx_type * const rename,
     tid_type * const owner,
     vtx_type const block,
-
-    // size_t   * const chunkcnt,
-    // vtx_type ** const chunkofst,
-
     dlthread_comm_t const comm)
 {
-  exit(1);    // disabled for debugging
-
   vtx_type i, v, k, chunkstart, chunkend;
   adj_type sum;
   adj_type * prefixsum;
@@ -1452,8 +1430,11 @@ static void S_par_distribute_blockcyclic(
   /* each thread populates its array portions */
   v = 0;
   for (k=vtxdist[myid];k<vtxdist[myid+1];++k) {
-    i = perm[k];  // distributed vertices aren't in order
-                  // because they have been vtx_blockcyclicperm()'d
+    /** distributed vertices aren't in order, because they have been
+     * vtx_blockcyclicperm()'d; but that's fine as long as the chunk is big
+     * enough that fseek() operations become free. */
+    i = perm[k];
+
     label[myid][v] = i;
     rename[i] = v++;
     owner[i] = myid;
@@ -3606,6 +3587,13 @@ graph_type * par_graph_distribute(
   dchunkcnt = graph->chunkcnt;
   dchunkofst = graph->chunkofst;
 
+  size_t tmp =
+      adjchunksize > xadj[nvtxs] ? xadj[nvtxs] : adjchunksize * 1.1;
+  dchunkofst[myid] = vtx_alloc(xadj[nvtxs] * 4.0 / tmp);
+
+  dchunkcnt[myid] = 0;
+  dchunkofst[myid][0] = 0;
+
   if (myid == 0) {
     /* labels must be explicitly allocated */
     graph->label = r_vtx_alloc(nthreads);
@@ -3620,8 +3608,8 @@ graph_type * par_graph_distribute(
   /* handle different distributions */
   switch(distribution) {
     case MTMETIS_DISTRIBUTION_BLOCK:
-      S_par_distribute_block(nvtxs,adjchunksize,xadj,dmynvtxs,dmynedges,dlabel,rename, \
-          owner,dchunkcnt,dchunkofst,comm);
+      S_par_distribute_block(nvtxs,xadj,dmynvtxs,dmynedges,dlabel,rename, \
+          owner,comm);
       break;
     case MTMETIS_DISTRIBUTION_CYCLIC:
       exit(1);    // TODO disabled for debugging
@@ -3629,7 +3617,6 @@ graph_type * par_graph_distribute(
           owner,comm);
       break;
     case MTMETIS_DISTRIBUTION_BLOCKCYCLIC:
-      exit(1);    // TODO disabled for debugging
       S_par_distribute_blockcyclic(nvtxs,xadj,dmynvtxs,dmynedges,dlabel, \
          rename,owner,4096,comm);
       break;
@@ -3645,21 +3632,25 @@ graph_type * par_graph_distribute(
   mynvtxs = dmynvtxs[myid];
   dxadj[myid] = adj_alloc(mynvtxs+1);
   dxadj[myid][0] = 0;
-  // dadjncy[myid] = vtx_alloc(dmynedges[myid]);   // chunks! shouldn't allocate this much
-  dadjncy[myid] = vtx_alloc(adjncy_chunksize);     // FIXME: 解决二分区块不精确的问题, max(chunksize[myid])
+  dadjncy[myid] = vtx_alloc(adjncy_chunksize);    // TODO: we can bypass this buffer entirely
   dvwgt[myid] = wgt_alloc(mynvtxs);
-  // dadjwgt[myid] = wgt_alloc(dmynedges[myid]);   // TODO chunks
   dadjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
   /* zero counts for insertion later */
   dmynedges[myid] = 0;
 
   /* populate edge arrays; slice into chunks */
+  /** TODO: for now, the whole file is read in before distribution takes place.
+   * thus I can do the distribution by doing _RANDOM_ reads and writing
+   * sequentially to binary files (multiple: one for each thread). Someday
+   * eliminate the random reads.
+   */
   l = 0;
   dxadj[myid][0] = 0;
   dlthread_barrier(comm);
   size_t mynowchunk = 0;
   adj_type chunkstart = 0;
+
   char fname1[1024], fname2[1024];
   sprintf(fname1, "dump_graph0_dadjncy_tid%"PF_TID_T".bin", myid);
   sprintf(fname2, "dump_graph0_dadjwgt_tid%"PF_TID_T".bin", myid);
@@ -3672,18 +3663,22 @@ graph_type * par_graph_distribute(
     // when scanning the vertices, jump between chunks
     i = dlabel[myid][v];    /* query the original vertex ID of local vertex v */
                             /* this should be strictly sequential for `block` distribution */
-    while (v >= dchunkofst[myid][mynowchunk+1]) {
+
+    // while (v >= dchunkofst[myid][mynowchunk+1]) {
+    if (l > adjchunksize) {
       // dump dadjncy into file
-      size_t chunklen = l;
-      fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
-      fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunklen, fname1);
-      fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
+      fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
+      fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", l, fname1);
+      fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
 
       // then switch to next chunk
-      chunkstart += l;
-      l = 0;
+      chunkstart += l; l = 0;
       ++mynowchunk;
+      
+      dchunkcnt[myid] = mynowchunk;
+      dchunkofst[myid][mynowchunk] = v;
     }
+
     for (j=xadj[i];j<xadj[i+1];++j) {
       /** LOCALITY preserved with block distribution */
       /* usually this requires random reads in adjncy; but
@@ -3697,18 +3692,24 @@ graph_type * par_graph_distribute(
         continue;
       }
 
+      /* retrieve the new name for the node k */
       nbrid = owner[k];
       lvtx = rename[k];
+
+      vtx_type Adjncy, Adjwgt;
       if (nbrid == myid) {
-        dadjncy[myid][l] = lvtx;
+        Adjncy = lvtx;
       } else {
-        dadjncy[myid][l] = lvtx_to_gvtx(lvtx,nbrid,dist);
+        Adjncy = lvtx_to_gvtx(lvtx,nbrid,dist);
       }
       if (adjwgt) {
-        dadjwgt[myid][l] = adjwgt[j];
+        Adjwgt = adjwgt[j];
       } else {
-        dadjwgt[myid][l] = 1;
+        Adjwgt = 1;
       }
+
+      dadjncy[myid][l] = Adjncy;
+      dadjwgt[myid][l] = Adjwgt;
       l++;    /* the edge array is filled sequentially; easy to slice */
     } // finish one vertex v
 
@@ -3719,11 +3720,16 @@ graph_type * par_graph_distribute(
 
   if (l > 0) {
     // dump dadjncy into file
-    size_t chunklen = l;
-    fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
-    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunklen, fname1);
-    fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
+    fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
+    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", l, fname1);
+    fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
+
+    chunkstart += l; l = 0;
+    ++mynowchunk;
+    dchunkcnt[myid] = mynowchunk;
+    dchunkofst[myid][mynowchunk] = mynvtxs;
   }
+
   fclose(dadjncy_dump);
   fclose(dadjwgt_dump);
 
