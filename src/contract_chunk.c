@@ -643,6 +643,8 @@ static void S_par_contract_CLS_quadratic(
 
   fclose(cadjncy_dump);
   fclose(cadjwgt_dump);
+  dl_free(local_adjncy);
+  dl_free(local_adjwgt);
   dl_free(htable);
 
   cgraph->mynedges[myid] = cnedges;

@@ -32,6 +32,16 @@ static void S_ser_write_to_disk(
   nedges = graph->mynedges;
   ncon   = 1;  // only 1 type of constraint is supported
 
+  {
+    // FIXME: re-allocate when attempting to read back
+    for (int myid = 0; myid < nthreads; ++myid) {
+      dl_free(graph->adjncy[myid]);
+      graph->adjncy[myid] = NULL;
+      dl_free(graph->adjwgt[myid]);
+      graph->adjwgt[myid] = NULL;
+    }
+  }
+
   if (graph->free_xadj) {
     for (int myid = 0; myid < nthreads; ++myid) {
       if (fwrite(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpout) != (size_t)(nvtxs[myid]+1))

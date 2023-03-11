@@ -230,7 +230,7 @@ static wgt_type S_par_partition_mlevel(
         " exposed edge weight.\n",graph->level,graph->nvtxs, \
         graph->nedges,graph->tadjwgt);
     
-    while (1);
+    exit(0);
     dlthread_barrier(graph->comm);
 
     switch (ctrl->ptype) {

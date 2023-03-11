@@ -81,8 +81,9 @@ if (DEFINED DEVEL AND NOT DEVEL EQUAL 0)
 endif()
  
 # Caveat(wtm): flag set for debugging and vtune
-# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99") 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -g -fsanitize=address") 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99") 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -g") 
+# set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99 -g -fsanitize=address") 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g") 
 
 if ("${CMAKE_C_COMPILER_ID}" STREQUAL "Intel")
