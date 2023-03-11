@@ -1324,8 +1324,28 @@ static vtx_type S_coarsen_match_SHEM(
   /* do the following for each chunk in adjncy
      but do it in random order (a permutation for c) */
   vtx_type *cperm = vtx_alloc(chunkcnt);
+  vtx_type *c_cnt = vtx_alloc(chunkcnt);
   vtx_incset(cperm, 0, 1, chunkcnt);
-  vtx_shuffle_r(cperm, chunkcnt, &seed);
+  for (int i = 0; i < chunkcnt; ++i)
+    c_cnt[i] = gchunkofst[myid][i+1] - gchunkofst[myid][i];
+  
+  // oh gosh I'm doing an O(n^2) sort here
+  for (int i = 0; i < chunkcnt; ++i) {
+    vtx_type mx = c_cnt[cperm[i]]; int t = i; int tmp = 0;
+    for (int j = i+1; j < chunkcnt; ++j) {
+      if (c_cnt[cperm[j]] > mx) {
+        t = j;
+        mx = c_cnt[cperm[j]];
+      }
+    }
+    if (t != i) {
+      tmp = cperm[t];
+      cperm[t] = cperm[i];
+      cperm[i] = tmp;
+    }
+  }
+  // vtx_shuffle_r(cperm, chunkcnt, &seed);
+  dl_free(c_cnt);
 
   for (int c0 = 0; c0 < chunkcnt; ++c0) {
     int c = cperm[c0];
@@ -1423,7 +1443,6 @@ static vtx_type S_coarsen_match_SHEM(
               lvtx = gvtx_to_lvtx(k,graph->dist);
             }
 
-            // TODO 参照 parmetis 的方式给这里加上噪音，而噪音的内容是：优先选择 chunk 编号相同、从属同线程的节点
             if (maxwgt < ewgt + (wgt_type)((pi+xadj[i])%2) && \
                 mywgt+gvwgt[nbrid][lvtx] <= maxvwgt && \
                 gmatch[nbrid][lvtx] == NULL_VTX) {
