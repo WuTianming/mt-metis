@@ -1310,6 +1310,34 @@ static vtx_type S_coarsen_match_SHEM(
     perm = NULL;
   }
 
+  adj_type critical_degree = 0;
+
+  /* find the critical degree, aka the 1/4th smallest degree */
+  {
+    adj_type L = 0, R = 0, mid;
+    adj_type cnt = 0;
+    for (i=0; i<mynvtxs;++i) {
+      dl_storemax(R, xadj[i+1] - xadj[i]);
+    }
+    fprintf(stderr, "calcing critical degree... maxdeg = %lld\n", (long long int)R);
+    while (R - L >= 100) {
+      mid = L + (R-L)/2;
+      cnt = 0;
+      for (i=0; i<mynvtxs;++i) {
+        if (xadj[i+1] - xadj[i] <= mid) ++cnt;
+      }
+      if (cnt >= mynvtxs * 0.26) {    // the guessed mid is too big
+        R = mid - 1;
+      } else if (cnt <= mynvtxs * 0.24) {
+        L = mid + 1;
+      } else {
+        break;
+      }
+    }
+    critical_degree = R + 1;
+    fprintf(stderr, "critical degree = %lld\n", (long long int)critical_degree);
+  }
+
   /* do the following for each chunk in adjncy */
   for (int c = 0; c < chunkcnt; ++c) {
     vtx_type chunkstart  = gchunkofst[myid][c],
@@ -1379,6 +1407,17 @@ static vtx_type S_coarsen_match_SHEM(
       if (mywgt < maxvwgt) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
         if (xadj[i+1] == xadj[i]) { 
           /* Deal with island vertices. Find a non-island and match it with. 
+              The matching ignores ctrl->maxvwgt requirements */
+          last_unmatched = dl_max(pi, last_unmatched)+1;
+          for (; last_unmatched<chunknvtxs; last_unmatched++) {
+            k = perm_r_ofst[last_unmatched];
+            if (match[k] == NULL_VTX) {
+              maxidx = k;
+              break;
+            }
+          }
+        } else if (xadj[i+1] - xadj[i] < critical_degree) {
+          /* Deal with small-deg vertices. Find someone else and match it with. 
               The matching ignores ctrl->maxvwgt requirements */
           last_unmatched = dl_max(pi, last_unmatched)+1;
           for (; last_unmatched<chunknvtxs; last_unmatched++) {
