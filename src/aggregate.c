@@ -1173,8 +1173,15 @@ static vtx_type S_coarsen_match_RM(
     fprintf(stderr, "critical degree = %lld\n", (long long int)critical_degree);
   }
 
-  /* do the following for each chunk in adjncy */
-  for (int c = 0; c < chunkcnt; ++c) {
+  /* do the following for each chunk in adjncy,
+     but do it in random order (a permutation for c) */
+  vtx_type *cperm = vtx_alloc(chunkcnt);
+  vtx_incset(cperm, 0, 1, chunkcnt);
+  vtx_shuffle_r(cperm, chunkcnt, &seed);
+
+  for (int c0 = 0; c0 < chunkcnt; ++c0) {
+    int c = cperm[c0];
+
     vtx_type chunkstart  = gchunkofst[myid][c],
              chunkend    = gchunkofst[myid][c+1];
     vtx_type chunknvtxs  = chunkend - chunkstart;
@@ -1183,6 +1190,7 @@ static vtx_type S_coarsen_match_RM(
     perm_r_ofst = perm + chunkstart;
 
     // populate adjncy arrays for current chunk
+    fseek(adjncy_dump, xadj[chunkstart] * sizeof(vtx_type), SEEK_SET);
     fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
 
     vtx_incset(perm_r_ofst,chunkstart,1,chunknvtxs);
@@ -1263,6 +1271,8 @@ static vtx_type S_coarsen_match_RM(
       }
     } /* outer match loop */
   }
+
+  free(cperm);
 
   fclose(adjncy_dump);
 
@@ -1347,8 +1357,15 @@ static vtx_type S_coarsen_match_SHEM(
     perm = NULL;
   }
 
-  /* do the following for each chunk in adjncy */
-  for (int c = 0; c < chunkcnt; ++c) {
+  /* do the following for each chunk in adjncy
+     but do it in random order (a permutation for c) */
+  vtx_type *cperm = vtx_alloc(chunkcnt);
+  vtx_incset(cperm, 0, 1, chunkcnt);
+  vtx_shuffle_r(cperm, chunkcnt, &seed);
+
+  for (int c0 = 0; c0 < chunkcnt; ++c0) {
+    int c = cperm[c0];
+
     vtx_type chunkstart  = gchunkofst[myid][c],
              chunkend    = gchunkofst[myid][c+1];
     vtx_type chunknvtxs  = chunkend - chunkstart;
@@ -1358,6 +1375,8 @@ static vtx_type S_coarsen_match_SHEM(
     perm_r_ofst = perm + chunkstart;
 
     // populate adjncy and adjwgt arrays for current chunk
+    fseek(adjncy_dump, xadj[chunkstart] * sizeof(vtx_type), SEEK_SET);
+    fseek(adjwgt_dump, xadj[chunkstart] * sizeof(wgt_type), SEEK_SET);
     fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
     fread(adjwgt, sizeof(wgt_type), chunknedges, adjwgt_dump);
 
@@ -1388,7 +1407,9 @@ static vtx_type S_coarsen_match_SHEM(
     /* create permutation */
     vv_countingsort_kv(degrees,tperm,0,avgdegree,chunknvtxs,perm_r_ofst,NULL);
     // perm = sort(tperm, key=degrees[ascending])
-    // TODO: why shuffle?
+
+    // hint: always try to match small-deg nodes first, or you end up with a lot
+    // unpaired
 
     DL_ASSERT(chunknvtxs < 2 || dl_min(xadj[perm_r_ofst[0]+1] - xadj[perm_r_ofst[0]],avgdegree) \
         <= xadj[perm_r_ofst[chunknvtxs-1]+1] - xadj[perm_r_ofst[chunknvtxs-1]],"Sorting failed\n");
@@ -1468,6 +1489,8 @@ static vtx_type S_coarsen_match_SHEM(
       }
     } /* for each v in current chunk */
   }
+
+  free(cperm);
 
   fclose(adjncy_dump);
   fclose(adjwgt_dump);
