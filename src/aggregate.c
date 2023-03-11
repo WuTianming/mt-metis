@@ -1146,6 +1146,7 @@ static vtx_type S_coarsen_match_RM(
   if (adjncy_dump == NULL) { exit(1); }
 
   adj_type critical_degree = 0;
+
   /* find the critical degree, aka the 1/4th smallest degree */
   {
     adj_type L = 0, R = 0, mid;
@@ -1154,7 +1155,7 @@ static vtx_type S_coarsen_match_RM(
       dl_storemax(R, xadj[i+1] - xadj[i]);
     }
     fprintf(stderr, "calcing critical degree... maxdeg = %lld\n", (long long int)R);
-    while (R - L >= 100) {
+    while (R - L >= 50) {
       mid = L + (R-L)/2;
       cnt = 0;
       for (i=0; i<mynvtxs;++i) {
