@@ -387,6 +387,11 @@ static vtx_type S_cleanup_match(
   return cnvtxs;
 }
 
+// some global variables...
+
+vtx_type n_self_paired, n_paired;
+
+
 /**
  * this version sorts coarse vertices according to the tuple
  * (first vertex chunk, second vertex chunk)
@@ -425,6 +430,8 @@ static vtx_type S_cleanup_match_chunk_locality(
 
   /** ================== fix all broken matches =================== */
 
+  vtx_type cnt_broken_local = 0, cnt_broken_remote = 0, original_matched = 0;
+
   for (i=0;i<mynvtxs;++i) {
     maxidx = gmatch[myid][i];
     gvtx = lvtx_to_gvtx(i,myid,graph->dist);
@@ -435,15 +442,19 @@ static vtx_type S_cleanup_match_chunk_locality(
       continue;
     }
 
+    { if (maxidx != i) original_matched++; }
+
     if (maxidx < mynvtxs) {                 // 对于内部配对节点，
       if (gmatch[myid][maxidx] != i) {      //   假如发现 i 配对是单向的
         gmatch[myid][i] = i;                //   则让 i 放弃配对
+        { cnt_broken_local++; }
       }
     } else {
       nbrid = gvtx_to_tid(maxidx,graph->dist);
       lvtx = gvtx_to_lvtx(maxidx,graph->dist);
       if (gmatch[nbrid][lvtx] != gvtx) {    // 对于跨线程配对节点，假如发现 i 配对是单向的，
         gmatch[myid][i] = i;                //   则让 i 放弃配对（配对自己）
+        { cnt_broken_remote++; }
       } else {
         // good match! leave as is
       }
@@ -453,7 +464,7 @@ static vtx_type S_cleanup_match_chunk_locality(
   dlthread_barrier(graph->comm);
 
 
-// /*
+// /* need to remove these assertions in release mode
   // confirm all matches are good
   vtx_type pair_cnt = 0, local_cnt = 0, self_cnt = 0;    // self-paired is not counted as paired
   for (i = 0; i < mynvtxs; ++i) {
@@ -482,7 +493,9 @@ static vtx_type S_cleanup_match_chunk_locality(
       ++self_cnt;
     }
   }
-  fprintf(stderr, "all matches are good and mutual! mynvtxs = %8"PF_VTX_T", self pair num = %8"PF_VTX_T", pair num = %8"PF_VTX_T", local pair num = %8"PF_VTX_T"\n", mynvtxs, self_cnt, pair_cnt, local_cnt);
+  fprintf(stderr, "all matches are good and mutual! mynvtxs = %8"PF_VTX_T", self pair num = %8"PF_VTX_T", pair num = %8"PF_VTX_T", local pair num = %8"PF_VTX_T". Orig. matched=%8"PF_VTX_T", broken=%"PF_VTX_T"+%"PF_VTX_T"\n", mynvtxs, self_cnt, pair_cnt, local_cnt, original_matched, cnt_broken_local, cnt_broken_remote);
+
+  n_paired = pair_cnt; n_self_paired = self_cnt;
 
   dlthread_barrier(graph->comm);
 // */
@@ -1084,6 +1097,7 @@ static vtx_type S_coarsen_match_twins(
   return cnvtxs;
 }
 
+int island_cheat = 0;
 
 /**
  * @brief Create a vertex aggregation by randomly matching vertices across
@@ -1183,7 +1197,7 @@ static vtx_type S_coarsen_match_RM(
         
         if (vwgt[i] < maxvwgt) {
           /* Deal with island vertices. Match locally */
-          if (xadj[i+1] == xadj[i]) { 
+          if (xadj[i+1] == xadj[i] || (island_cheat == 1 && (xadj[i+1]-xadj[i] < 100))) { 
             last_unmatched = dl_max(pi, last_unmatched)+1;
             for (; last_unmatched<chunknvtxs; last_unmatched++) {
               k = perm_r_ofst[last_unmatched];
@@ -1268,6 +1282,8 @@ static vtx_type S_coarsen_match_SHEM(
     vtx_type * const * const gmatch,  // output
     vtx_type * const fcmap) 
 {
+  n_self_paired = 0, n_paired = 0;
+
   unsigned int seed;
   vtx_type cnvtxs, i, pi, k, maxidx, last_unmatched, \
       lvtx, gvtx;
@@ -1326,10 +1342,13 @@ static vtx_type S_coarsen_match_SHEM(
   vtx_type *cperm = vtx_alloc(chunkcnt);
   vtx_type *c_cnt = vtx_alloc(chunkcnt);
   vtx_incset(cperm, 0, 1, chunkcnt);
+  // vtx_incset(cperm, chunkcnt-1, -1, chunkcnt);
   for (int i = 0; i < chunkcnt; ++i)
     c_cnt[i] = gchunkofst[myid][i+1] - gchunkofst[myid][i];
   
   // oh gosh I'm doing an O(n^2) sort here
+  // FIXME: Caveat
+// /*
   for (int i = 0; i < chunkcnt; ++i) {
     vtx_type mx = c_cnt[cperm[i]]; int t = i; int tmp = 0;
     for (int j = i+1; j < chunkcnt; ++j) {
@@ -1344,6 +1363,7 @@ static vtx_type S_coarsen_match_SHEM(
       cperm[i] = tmp;
     }
   }
+// */
   // vtx_shuffle_r(cperm, chunkcnt, &seed);
   dl_free(c_cnt);
 
@@ -1390,7 +1410,7 @@ static vtx_type S_coarsen_match_SHEM(
 
     /* create permutation */
     vv_countingsort_kv(degrees,tperm,0,avgdegree,chunknvtxs,perm_r_ofst,NULL);
-    // perm = sort(tperm, key=degrees[ascending])
+    // pseudocode: perm = sort(tperm, key=degrees[ascending])
 
     // hint: always try to match small-deg nodes first, or you end up with a lot
     // unpaired
@@ -1405,6 +1425,15 @@ static vtx_type S_coarsen_match_SHEM(
     // now perm = sort(0~chunknvtxs-1, key=degrees[ascending])
 
     last_unmatched=0; 
+
+    if (myid == 0) {
+      fprintf(stderr, "avgdeg = %4d; ", (int)avgdegree);
+      for (pi=0; pi<chunknvtxs;pi += chunknvtxs / 10) {
+        i = perm_r_ofst[pi];
+        fprintf(stderr, " %4d", (int)(xadj[i+1]-xadj[i]));
+      }
+      fprintf(stderr, "\n");
+    }
 
     for (pi=0; pi<chunknvtxs;++pi) {
       /* request my matches. match[] is inter-chunk intra-thread */
@@ -1930,6 +1959,7 @@ vtx_type par_aggregate_graph(
   /* coarsening scheme selection used to go here */
   switch(ctrl->ctype) {
     case MTMETIS_CTYPE_RM:
+      island_cheat = 0;
       cnvtxs = S_coarsen_match_RM(ctrl,graph,gmatch,fcmap);
       break;
     case MTMETIS_CTYPE_SHEM:
@@ -1939,6 +1969,20 @@ vtx_type par_aggregate_graph(
       } else {
         // fprintf(stderr, "SHEM\n");
         cnvtxs = S_coarsen_match_SHEM(ctrl,graph,gmatch,fcmap);
+        int *p = dlthread_get_shmem(sizeof(int),graph->comm);
+        if (myid == 0) {
+          *p = 0;
+          if (n_self_paired >= n_paired) {
+            fprintf(stderr, "DETECTED ineffective SHEM matching. Shortly launching RM matching again...\n");
+            *p = 1;
+          }
+        }
+        dlthread_barrier(graph->comm);
+        if (*p == 1) {
+          island_cheat = 1;
+          memset(gmatch[myid], -1, mynvtxs * sizeof(vtx_type));
+          cnvtxs = S_coarsen_match_RM(ctrl,graph,gmatch,fcmap);
+        }
       }
       break;
     case MTMETIS_CTYPE_FC:
