@@ -82,7 +82,7 @@ DLLCB_VISIBILITY void DLLCB_PUB(combuffer_add)(
     DLLCB_PRI(info_t) * const info = com->infos+myid;
 
   // for now, combuffer is always allocated with maximum size;
-  // TODO(wtm) try to make this more efficient by allocating lazily on the fly
+  // TODO: (wtm) try to make this more efficient by allocating lazily on the fly
   DL_ASSERT(info->lastmsg < info->maxmsgs,"Overflowed combuffer");
 
   msg = info->nodes + (info->lastmsg++);
@@ -109,6 +109,7 @@ DLLCB_VISIBILITY int DLLCB_PUB(combuffer_next)(
     DLLCB_TYPE_T * const r_next,
     DLLCB_PUB(combuffer_t) * const com)
 {
+  /** 属实有点抽象，为什么一个出队列函数写这么长我艹 */
   size_t i;
   DLLCB_PRI(node_t) * msg;
 

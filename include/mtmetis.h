@@ -213,7 +213,7 @@ typedef enum mtmetis_ignore_t {
 ******************************************************************************/
 
 
-static size_t const MTMETIS_NOPTIONS = __MTMETIS_OPTION_TERM;   // TODO 这里很妙，用 enum 的结尾的自动编号来确定 option 个数
+static size_t const MTMETIS_NOPTIONS = __MTMETIS_OPTION_TERM;
 static double const MTMETIS_VAL_OFF = -DBL_MAX;
 
 

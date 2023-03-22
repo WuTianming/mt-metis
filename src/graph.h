@@ -52,11 +52,11 @@ typedef struct graph_type {
   adj_type * mynedges;
   adj_type ** xadj;
   wgt_type ** vwgt;
-  vtx_type ** adjncy;       // TODO: only have one chunk resident in memory
+  vtx_type ** adjncy;
   wgt_type ** adjwgt;
   /* chunked adjncy */
-  size_t * chunkcnt;        // TODO initialize this
-  vtx_type ** chunkofst;    // vtx = mynvtxs + chunkofst[c]
+  size_t * chunkcnt;
+  vtx_type ** chunkofst;
   /* graph info */
   int uniformvwgt;
   int uniformadjwgt;
