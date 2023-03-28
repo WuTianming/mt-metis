@@ -172,6 +172,9 @@ static void S_graph_free_part(
     dl_free(graph->adjwgt[myid]);
   }
 
+  /* free chunk structure (although not a big deal) */
+  dl_free(graph->chunkofst[myid]);
+
   /* free auxillery things */
   if (graph->label) {
     dl_free(graph->label[myid]);
@@ -1883,6 +1886,9 @@ void graph_free(
   dl_free(graph->adjwgt);
   dl_free(graph->mynvtxs);
   dl_free(graph->mynedges);
+
+  dl_free(graph->chunkcnt);
+  dl_free(graph->chunkofst);
 
   if (graph->cmap) {
     dl_free(graph->cmap);

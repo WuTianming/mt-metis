@@ -633,6 +633,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
     }
   } /* end passes */
 
+  dl_free(cperm);
+
   if (!single_chunk) {
     fclose(adjncy_read);
     fclose(adjwgt_read);

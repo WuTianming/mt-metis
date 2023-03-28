@@ -244,7 +244,14 @@ static void S_ser_read_from_disk(
     }
   } else {
     for (int myid = 0; myid < nthreads; ++myid) {
-      graph->adjncy[myid] = vtx_alloc(ctrl->adjchunksize * 1.1);
+      mtmetis_vtx_type *ofst = graph->chunkofst[myid];
+      mtmetis_adj_type *xadj = graph->xadj[myid];
+      size_t adjncy_chunksize = xadj[ofst[1]];
+      for (int i = 1; i < graph->chunkcnt[myid]; ++i) {
+        dl_storemax(adjncy_chunksize, xadj[ofst[i+1]] - xadj[ofst[i]]);
+      }
+      graph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
+      graph->free_adjncy = 1;   // these arrays will be freed later by `par_graph_free()`
     }
   }
   if (graph->free_adjwgt) {
@@ -255,7 +262,14 @@ static void S_ser_read_from_disk(
     }
   } else {
     for (int myid = 0; myid < nthreads; ++myid) {
-      graph->adjwgt[myid] = wgt_alloc(ctrl->adjchunksize * 1.1);
+      mtmetis_vtx_type *ofst = graph->chunkofst[myid];
+      mtmetis_adj_type *xadj = graph->xadj[myid];
+      size_t adjncy_chunksize = xadj[ofst[1]];
+      for (int i = 1; i < graph->chunkcnt[myid]; ++i) {
+        dl_storemax(adjncy_chunksize, xadj[ofst[i+1]] - xadj[ofst[i]]);
+      }
+      graph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
+      graph->free_adjwgt = 1;
     }
   }
 
@@ -343,8 +357,10 @@ void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   // now that the graph had been written onto the disk,
   // wait for the write to complete
   if (graph->ondisk == OFFLOADING) {
-    pthread_join(graph->io_pid, (void *)&pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t);
     graph->ondisk = LOADING;
+
+    free(pre_t);
   }
 
   pthread_t pid;
@@ -368,9 +384,11 @@ void await_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
 
   // the state machine:
   if (graph->ondisk == LOADING) {
-    pthread_join(graph->io_pid, (void *)&pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t);
     graph->io_pid = 0;
     graph->ondisk = RESIDENT;
+
+    free(pre_t);
   }
 }
 

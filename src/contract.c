@@ -208,6 +208,9 @@ static void S_par_contract_DENSE(
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges_upperlimit);
 
+  cgraph->free_adjncy = 1;
+  cgraph->free_adjwgt = 1;
+
   table = NULL;
 
   table = adj_init_alloc(NULL_ADJ,graph->gnvtxs);
