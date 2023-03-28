@@ -230,7 +230,6 @@ static wgt_type S_par_partition_mlevel(
         " exposed edge weight.\n",graph->level,graph->nvtxs, \
         graph->nedges,graph->tadjwgt);
     
-    exit(0);
     dlthread_barrier(graph->comm);
 
     switch (ctrl->ptype) {
@@ -247,7 +246,8 @@ static wgt_type S_par_partition_mlevel(
         dl_error("Unknown partition type '%d'\n",ctrl->ptype);
     }
 
-    par_refine_graph(ctrl,cgraph);
+    // par_refine_graph(ctrl,cgraph);
+    par_refine_chunk_graph(ctrl,cgraph);
   } else {
     if (ctrl->ondisk) {
       if (dlthread_get_id(ctrl->comm) == 0)
@@ -657,9 +657,9 @@ void partition_print_info(
     }
 
     /* Compute objective-related infomration */
-    printf(" - Edgecut: %"PF_WGT_T", communication volume: %"PF_VTX_T".\n\n", \
-      S_ser_calc_cut(graph,where),S_ser_calc_comvol(graph,where, \
-        nparts));
+    printf(" - Edgecut and communication volume calculation (TODO:) \n\n");
+    // printf(" - Edgecut: %"PF_WGT_T", communication volume: %"PF_VTX_T".\n\n", \
+    //   S_ser_calc_cut(graph,where),S_ser_calc_comvol(graph,where,nparts));
 
 
     /* Compute constraint-related information */

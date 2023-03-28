@@ -344,9 +344,9 @@ static void S_par_contract_CLS_quadratic(
   size_t   const * const gchunkcnt = graph->chunkcnt;
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const * const *)graph->adjncy;
   wgt_type const * const * const gvwgt = (wgt_type const * const *)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const * const *)graph->adjwgt;
+  vtx_type * const * const gadjncy = (vtx_type * const *)graph->adjncy;
+  wgt_type * const * const gadjwgt = (wgt_type * const *)graph->adjwgt;
 
   vtx_type const * const * const gcmap = (vtx_type const **)graph->cmap;
 
@@ -460,12 +460,18 @@ static void S_par_contract_CLS_quadratic(
 
   for (int cc1=0; cc1<maxchunkcnt; ++cc1) {
     dlthread_barrier(graph->comm);    // barrier every time before file read
+
+    /* if I don't have more chunks to process, make sure to mirror the barrier
+     * calls as other threads do. Otherwise the lockstep might break and mess up
+     * the rest of the program */
     if (cc1 >= gchunkcnt[myid]) {
       for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
         dlthread_barrier(graph->comm);    // barrier every time before file read
+        dlthread_barrier(graph->comm);    // after file read, too
       }
       continue;
     }
+
     vtx_type cc1start = gchunkofst[myid][cc1], cc1end = gchunkofst[myid][cc1+1];
     adj_type cc1adjstart = gxadj[myid][cc1start], cc1adjend = gxadj[myid][cc1end];
     fseek(dadjncy_read, sizeof(vtx_type) * cc1adjstart, SEEK_SET);
@@ -474,19 +480,14 @@ static void S_par_contract_CLS_quadratic(
     fread(local_adjwgt, sizeof(wgt_type), cc1adjend - cc1adjstart, dadjwgt_read);
 
 // #define PRINT_LOOP_VAR
-
 #ifdef PRINT_LOOP_VAR
-      {
         fprintf(stderr, "#%"PF_TID_T": this chunk is [%"PF_VTX_T", %"PF_VTX_T")\n", myid, cc1start, cc1end);
-      }
 #endif
 
     for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
       dlthread_barrier(graph->comm);    // barrier every time before file read
 #ifdef PRINT_LOOP_VAR
-      if (myid == 0) {
-        fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2);
-      }
+      if (myid == 0) { fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2); }
 #endif
       vtx_type cc2start, cc2end;
       adj_type cc2adjstart, cc2adjend;
@@ -497,7 +498,12 @@ static void S_par_contract_CLS_quadratic(
         fseek(dadjwgt_read, sizeof(wgt_type) * cc2adjstart, SEEK_SET);
         fread(gadjncy[myid], sizeof(vtx_type), cc2adjend - cc2adjstart, dadjncy_read);
         fread(gadjwgt[myid], sizeof(wgt_type), cc2adjend - cc2adjstart, dadjwgt_read);  // this space is shared
+      } else {
+        /* in this stage, no one should ever try to read chunk #cc2 of this
+         * local thread. */
       }
+
+      dlthread_barrier(ctrl->comm);   // sync all threads to finish the read
 
       // coarse vertices have their info gathered in order
       // start where we left off at coarse idx = c
@@ -568,6 +574,7 @@ static void S_par_contract_CLS_quadratic(
                 /* new edge */
                 // TODO because this is filled sequentially, we can just call
                 // fwrite without manually buffering with `mycadjncy`
+                // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 adjwgt_sum += ewgt;
@@ -577,8 +584,11 @@ static void S_par_contract_CLS_quadratic(
                 i += start;
                 /* search for existing edge */
                 for (jj=i;jj<cnedges;++jj) {
-                  if (pcadjncy[jj] == k) {    // FIXME: we only need to store the edges of one cnode
+                  if (pcadjncy[jj] == k) {
                     pcadjwgt[jj] += ewgt;
+                    if (pcadjwgt[jj] == 0) {
+                      fprintf(stderr, "error!\n");
+                    }
                     adjwgt_sum += ewgt;
                     break;
                   }
@@ -612,6 +622,20 @@ static void S_par_contract_CLS_quadratic(
 
         mycxadj[c+1] = cnedges;
 
+        if (mycxadj[c+1] == mycxadj[c]) {
+          k = gmatch[o][v]; t = myid;
+          if (k >= graph->mynvtxs[o]) {
+            t = gvtx_to_tid(k, graph->dist);
+            k = gvtx_to_lvtx(k, graph->dist);
+          } // now (o,v) is paired to (t,k)
+          if (!(o == t && v == k && gxadj[o][v] == gxadj[o][v + 1]) &&
+              !((o != t || v != k) && gxadj[o][v] + 1 == gxadj[o][v + 1] && gxadj[t][k] + 1 == gxadj[t][k + 1]) &&
+              !((o != t || v != k) && gxadj[o][v] == gxadj[o][v + 1] && gxadj[t][k] == gxadj[t][k + 1])
+              ) {
+            fprintf(stderr, "warning: node with no outgoing edges produced. Check the original nodes to see if there is an error!\n");
+          }
+        }
+
         /* check if the chunk length reaches maximum */
         size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
         if (chunkadjs > ctrl->adjchunksize) {
@@ -624,15 +648,16 @@ static void S_par_contract_CLS_quadratic(
           fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
         }
 
-      }
-    }
-  }
+      } // end current coarse node c
+    } // end cc2
+  } // end cc1
+
   DL_ASSERT_EQUALS(c, mycnvtxs, "%"PF_VTX_T);
 
   size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt - 1]];
   if (chunkadjs > 0) {
 #ifdef PRINT_LOOP_VAR
-    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunkadjs, fout1);
+    // fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunkadjs, fout1);
 #endif
     mycchunkofst[*pchunkcnt] = mycnvtxs;
     fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
@@ -641,8 +666,9 @@ static void S_par_contract_CLS_quadratic(
     --*pchunkcnt;
   }
 
-  fclose(cadjncy_dump);
-  fclose(cadjwgt_dump);
+  fclose(cadjncy_dump); fclose(cadjwgt_dump);
+  fclose(dadjncy_read); fclose(dadjwgt_read);
+
   dl_free(local_adjncy);
   dl_free(local_adjwgt);
   dl_free(htable);
@@ -680,6 +706,53 @@ static void S_par_contract_CLS_quadratic(
   dlthread_barrier(ctrl->comm);
 
   // DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
+
+  /* generate a vanilla mt-metis graph structure to check the edge structure
+   * integrity */
+  if (0) {
+    graph_type *g_gather = dlthread_get_shmem(sizeof(graph_type), graph->comm);
+    dlthread_barrier(ctrl->comm);
+
+    if (myid == 0) {
+      *g_gather = *cgraph;    // copy all the pointers
+      g_gather->adjncy = r_vtx_alloc(nthreads);
+      g_gather->adjwgt = r_wgt_alloc(nthreads);
+    }
+    dlthread_barrier(ctrl->comm);
+
+    FILE *adjncy_read = fopen(fout1, "rb");
+    FILE *adjwgt_read = fopen(fout2, "rb");
+    size_t b;
+    fprintf(stderr, "graph %zu, tid %d, size %zu\n", cgraph->level, (int)myid, (size_t)(cnedges));
+
+    g_gather->adjncy[myid] = vtx_alloc(cnedges + 1);
+    g_gather->adjwgt[myid] = wgt_alloc(cnedges + 1);
+
+    b = fread(g_gather->adjncy[myid], sizeof(vtx_type), cnedges, adjncy_read);
+    if (b != cnedges) { dl_error("[tid %d] file length error at line %d\n", (int)myid, __LINE__); }
+    b = fread(g_gather->adjwgt[myid], sizeof(wgt_type), cnedges, adjwgt_read);
+    if (b != cnedges) { dl_error("[tid %d] file length error at line %d\n", (int)myid, __LINE__); }
+    dlthread_barrier(ctrl->comm);
+
+    fclose(adjncy_read);
+    fclose(adjwgt_read);
+
+    int chk = check_graph(g_gather);
+
+    if (chk != 1) {
+      dl_error("Bad graph generated in coarsening\n");
+    }
+    dlthread_barrier(ctrl->comm);
+    dl_free(g_gather->adjncy[myid]);
+    dl_free(g_gather->adjwgt[myid]);
+    dlthread_barrier(ctrl->comm);
+    if (myid == 0) {
+      dl_free(g_gather->adjncy);
+      dl_free(g_gather->adjwgt);
+    }
+    dlthread_barrier(ctrl->comm);
+    dlthread_free_shmem(g_gather, ctrl->comm);
+  }
 }
 
 
@@ -702,12 +775,10 @@ void par_contract_chunk_graph(
       S_par_contract_CLS_quadratic(ctrl,graph,mycnvtxs,gmatch,fcmap);
       break;
     case MTMETIS_CONTYPE_DENSE:
-      exit(1);
-      // S_par_contract_DENSE(ctrl,graph,mycnvtxs,gmatch,fcmap);
+      dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
       break;
     case MTMETIS_CONTYPE_SORT:
-      exit(1);
-      // S_par_contract_SORT(ctrl,graph,mycnvtxs,gmatch,fcmap);
+      dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
       break;
     default:
       dl_error("Unknown contraction type '%d'\n",ctrl->contype);

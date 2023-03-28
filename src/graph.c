@@ -2336,6 +2336,7 @@ void par_chunk_graph_setup_twgts(
     vsum = twgt_dlthread_sumreduce(vsum,graph->comm);
   }
 
+  asum = twgt_dlthread_sumreduce(asum,graph->comm);
   if (myid == 0) {
     graph->tvwgt = vsum;
     graph->tadjwgt = asum;
@@ -3571,6 +3572,9 @@ graph_type * par_graph_distribute(
 
   graph = par_graph_create(comm);
 
+  /* NOTE: since graph distribution always happens only for the original input
+   * graph, we assume that the input graph has uniform weight, i.e. the edges
+   * are uniformly weighted for the input graph. */
   graph->uniformadjwgt = 1;
 
   owner = dlthread_get_shmem((sizeof(*owner)*nvtxs) + \

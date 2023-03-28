@@ -329,7 +329,7 @@ int check_graph(
   for (myid=0;myid<graph->dist.nthreads;++myid) {
     mynvtxs = graph->mynvtxs[myid];
     xadj = graph->xadj[myid];
-    adjncy = graph->adjncy[myid];     // TODO: change check function for the new structure
+    adjncy = graph->adjncy[myid];
     adjwgt = graph->adjwgt[myid];
     tvwgt += wgt_lsum(graph->vwgt[myid],mynvtxs);
     tadjwgt += wgt_lsum(graph->adjwgt[myid],xadj[mynvtxs]);
@@ -356,7 +356,7 @@ int check_graph(
             printf("Local vertex is stored as remote\n");
             return 0;
           }
-        }
+        } /* (myid,i) -- (nbrid, k) */
         xudj = graph->xadj[nbrid];
         udjncy = graph->adjncy[nbrid];
         udjwgt = graph->adjwgt[nbrid];

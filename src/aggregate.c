@@ -418,9 +418,9 @@ static vtx_type S_cleanup_match_chunk_locality(
   memset(fcmap, -1, sizeof(vtx_type) * mynvtxs);    // -1 for NULL_VTX
 
   size_t mychunkcnt = graph->chunkcnt[myid];
-  vtx_type const * const mychunkofst = graph->chunkofst[myid];
-  vtx_type const * const gchunkcnt = graph->chunkcnt;
-  vtx_type const * const * const gchunkofst = graph->chunkofst;
+  vtx_type const * const mychunkofst = (vtx_type const *)graph->chunkofst[myid];
+  vtx_type const * const gchunkcnt = (vtx_type const *)graph->chunkcnt;
+  vtx_type const * const * const gchunkofst = (vtx_type const * const *)graph->chunkofst;
 
   size_t maxchunkcnt = mychunkcnt;
   for (tid_type t = 0; t < dlthread_get_nthreads(graph->comm); ++t) {
@@ -1136,7 +1136,7 @@ static vtx_type S_coarsen_match_RM(
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
-  vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
+  vtx_type * const * const gadjncy = (vtx_type **)graph->adjncy;
   vtx_type ** const gcmap = graph->cmap;
 
   wgt_type const maxvwgt = ctrl->maxvwgt;
@@ -1146,7 +1146,7 @@ static vtx_type S_coarsen_match_RM(
   size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
   wgt_type const * const vwgt = gvwgt[myid];
-  vtx_type const * const adjncy = gadjncy[myid];
+  vtx_type * const adjncy = gadjncy[myid];
 
   vtx_type const * adjncy_ofst;
   wgt_type const * adjwgt_ofst;
@@ -1319,17 +1319,17 @@ static vtx_type S_coarsen_match_SHEM(
 
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const **)graph->adjwgt;
+  vtx_type * const * const gadjncy = graph->adjncy;
+  wgt_type * const * const gadjwgt = graph->adjwgt;
 
   /* thread local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
   size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
-  vtx_type const * const adjncy = gadjncy[myid];
+  vtx_type * const adjncy = gadjncy[myid];
   wgt_type const * const vwgt = gvwgt[myid];
-  wgt_type const * const adjwgt = gadjwgt[myid];
+  wgt_type * const adjwgt = gadjwgt[myid];
   vtx_type * const match = gmatch[myid];
 
   vtx_type const * adjncy_ofst;

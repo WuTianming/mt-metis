@@ -1,4 +1,5 @@
 #include "asyncio.h"
+#include "metislib.h"
 #include "string.h"
 
 static void S_ser_write_to_disk(
@@ -163,9 +164,11 @@ graph_type *  S_ser_recover_graph_metadata(
   ncon   = 1;  // only 1 type of constraint is supported
 
   sprintf(infile, "dump_meta.%d.txt", graph->gID);
-  if ((metaout = fopen(infile, "r")) == NULL) return;
+  if ((metaout = fopen(infile, "r")) == NULL) {
+    dl_error("cannot open metadata file for graph recovery\n");
+  }
 
-  fscanf(metaout, "%d %"PF_TID_T" %d %d %d %d %d %d %d %d", &graph->gID, &nthreads,
+  fscanf(metaout, "%d %"PF_TID_T" %"PF_VTX_T" %d %d %d %d %d %d %d", &graph->gID, &nthreads,
          &ncon, &graph->uniformadjwgt, &graph->uniformvwgt,
          &graph->free_adjncy, &graph->free_adjwgt, &graph->free_vsize,
          &graph->free_vwgt, &graph->free_xadj);
@@ -239,12 +242,20 @@ static void S_ser_read_from_disk(
       if (fread(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
         abort();
     }
+  } else {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->adjncy[myid] = vtx_alloc(ctrl->adjchunksize * 1.1);
+    }
   }
   if (graph->free_adjwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
       graph->adjwgt[myid] = wgt_alloc(nedges[myid]);
       if (fread(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
         abort();
+    }
+  } else {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      graph->adjwgt[myid] = wgt_alloc(ctrl->adjchunksize * 1.1);
     }
   }
 
@@ -332,7 +343,7 @@ void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   // now that the graph had been written onto the disk,
   // wait for the write to complete
   if (graph->ondisk == OFFLOADING) {
-    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t); // free(pre_t);
     graph->ondisk = LOADING;
   }
 
@@ -357,7 +368,7 @@ void await_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
 
   // the state machine:
   if (graph->ondisk == LOADING) {
-    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t); // free(pre_t);
     graph->io_pid = 0;
     graph->ondisk = RESIDENT;
   }
@@ -378,7 +389,7 @@ void async_cmd(char *line) {
 
   pthread_t pid;
 
-  int ret = pthread_create(&pid, NULL, &launch_cmd, (void *)new_str);
+  int ret = pthread_create(&pid, NULL, (void *)&launch_cmd, (void *)new_str);
   if (ret) {
     fprintf(stderr, "pthread_create for async command failed. requested cmd: \"%s\"\n", new_str);
     exit(1);
