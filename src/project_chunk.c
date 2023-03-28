@@ -56,8 +56,8 @@ static void S_project_kway(
   size_t   const * const gchunkcnt = graph->chunkcnt;
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
-  wgt_type const * const * const gadjwgt = (wgt_type const **)graph->adjwgt;
+  vtx_type * const * const gadjncy = (vtx_type **)graph->adjncy;
+  wgt_type * const * const gadjwgt = (wgt_type **)graph->adjwgt;
 
   int const greedy = ctrl->rtype == MTMETIS_RTYPE_GREEDY;
 
@@ -69,6 +69,7 @@ static void S_project_kway(
   adj_type const * const xadj = gxadj[myid];
 
   gkwinfo = cgraph->kwinfo;
+  dlthread_barrier(ctrl->comm);   // There was a race cond. in the original code
   
   if (myid == 0) {
     wgt_copy(graph->pwgts,cgraph->pwgts,nparts);
@@ -107,25 +108,35 @@ static void S_project_kway(
   // 目标是减少磁盘读写，所以直接不区分 nid 和 ned，完全按照边的存储顺序来。最后处理出所有的 id 和 ed 的值
   // 还要处理出：所有边界结点的 mynbrs 集合。判定 is_bnd()
 
+  int single_chunk = 1;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    if (graph->chunkcnt[i] > 1) {
+      single_chunk = 0;
+      break;
+    }
+  }
+
   char fin1[1024], fin2[1024];
   sprintf(fin1, "dump_graph%zu_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
   sprintf(fin2, "dump_graph%zu_dadjwgt_tid%"PF_TID_T".bin", graph->level, myid);
   FILE *adjncy_read = fopen(fin1, "rb");
   FILE *adjwgt_read = fopen(fin2, "rb");
-  DL_ASSERT(adjncy_read != NULL, "open adjncy file for read");
-  DL_ASSERT(adjwgt_read != NULL, "open adjwgt file for read");
+  DL_ASSERT(single_chunk || adjncy_read != NULL, "open adjncy file for read");
+  DL_ASSERT(single_chunk || adjwgt_read != NULL, "open adjwgt file for read");
 
   for (int c=0; c<gchunkcnt[myid]; ++c) {
     vtx_type cstart = gchunkofst[myid][c], cend = gchunkofst[myid][c+1];
     adj_type cadjstart = xadj[cstart], cadjend = xadj[cend];
-    fseek(adjncy_read, sizeof(vtx_type) * cadjstart, SEEK_SET);
-    fseek(adjwgt_read, sizeof(wgt_type) * cadjstart, SEEK_SET);
-    fread(gadjncy[myid], sizeof(vtx_type), cadjend - cadjstart, adjncy_read);
-    fread(gadjwgt[myid], sizeof(wgt_type), cadjend - cadjstart, adjwgt_read);
+    if (!single_chunk) {
+      fseek(adjncy_read, sizeof(vtx_type) * cadjstart, SEEK_SET);
+      fseek(adjwgt_read, sizeof(wgt_type) * cadjstart, SEEK_SET);
+      fread(gadjncy[myid], sizeof(vtx_type), cadjend - cadjstart, adjncy_read);
+      fread(gadjwgt[myid], sizeof(wgt_type), cadjend - cadjstart, adjwgt_read);
+    }
     vtx_type const *const padjncy = gadjncy[myid] - cadjstart;
     wgt_type const *const padjwgt = gadjwgt[myid] - cadjstart;
 
-    for (i=0;i<mynvtxs;++i) {
+    for (i=cstart;i<cend;++i) {
       istart = xadj[i];
       iend = xadj[i+1];
 
@@ -196,6 +207,11 @@ static void S_project_kway(
 
   dl_free(htable);
 
+  if (!single_chunk) {
+    fclose(adjncy_read);
+    fclose(adjwgt_read);
+  }
+
   DL_ASSERT((dlthread_barrier(ctrl->comm),check_kwinfo(kwinfo,graph, \
           (pid_type const **)gwhere)),"Bad info");
 
@@ -225,6 +241,8 @@ void par_project_chunk_graph(
   vtx_type const mycnvtxs = cgraph->mynvtxs[myid];
   pid_type const * const * const gcwhere = (pid_type const **)cgraph->where;
 
+  dlthread_barrier(ctrl->comm);
+
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.projection));
   }
@@ -249,18 +267,16 @@ void par_project_chunk_graph(
   switch (ctrl->ptype) {
     case MTMETIS_PTYPE_ND:
     case MTMETIS_PTYPE_VSEP:
-      graph->minsep = cgraph->minsep;
-      dl_error("Unsupported partition type '%d' for chunk-based projection\n",ctrl->ptype);
-      break;
     case MTMETIS_PTYPE_RB:
     case MTMETIS_PTYPE_ESEP:
-      graph->mincut = cgraph->mincut;
       dl_error("Unsupported partition type '%d' for chunk-based projection\n",ctrl->ptype);
       break;
+
     case MTMETIS_PTYPE_KWAY:
       graph->mincut = cgraph->mincut;
       S_project_kway(ctrl,graph);
       break;
+
     default:
       dl_error("Unknown partition type '%d'\n",ctrl->ptype);
   }
