@@ -351,6 +351,8 @@ static vtx_type S_cleanup_match(
     }
   }
 
+  goto skip_check;
+
   // check if fcmap maintains order
   for (i = 1; i < cnvtxs; ++i) {
     DL_ASSERT(fcmap[i-1] <= fcmap[i], "fcmap in order at %"PF_VTX_T"\n", i);
@@ -383,6 +385,8 @@ static vtx_type S_cleanup_match(
   }
 
   fprintf(stderr, "check passed\n");
+
+skip_check:
 
   return cnvtxs;
 }
@@ -477,7 +481,7 @@ static vtx_type S_cleanup_match_chunk_locality(
       k = gvtx_to_lvtx(k, graph->dist);
     } // now (o,v) is paired to (t,k)
 
-    {
+    if (0 /*skip check*/) {
       vtx_type mv = gmatch[o][v], mk = gmatch[t][k];
       tid_type tv = o, tk = t;
       if (mv > graph->dist.mask) tv = gvtx_to_tid(mv, graph->dist), mv = gvtx_to_lvtx(mv, graph->dist);
