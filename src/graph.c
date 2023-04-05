@@ -14,10 +14,13 @@
 #define MTMETIS_GRAPH_C
 
 
+#define _DEFAULT_SOURCE
 
 
 #include "graph.h"
 #include "check.h"
+
+#include <sys/mman.h>
 
 
 
@@ -3533,6 +3536,7 @@ graph_type * par_graph_distribute(
     size_t   const adjchunksize,
     adj_type const * const xadj,
     vtx_type const * const adjncy,
+    int is_mmaped,
     wgt_type const * const vwgt,
     wgt_type const * const adjwgt,
     dlthread_comm_t const comm)
@@ -3598,7 +3602,7 @@ graph_type * par_graph_distribute(
   dchunkofst = graph->chunkofst;
 
   size_t tmp =
-      adjchunksize > xadj[nvtxs] ? xadj[nvtxs] : adjchunksize * 1.1;
+      adjchunksize > xadj[nvtxs] ? xadj[nvtxs] : adjchunksize;
   dchunkofst[myid] = vtx_alloc(xadj[nvtxs] * 4.0 / tmp);
 
   dchunkcnt[myid] = 0;
@@ -3638,7 +3642,7 @@ graph_type * par_graph_distribute(
 
   /* allocate arrays */
   size_t adjncy_chunksize =
-      adjchunksize > dmynedges[myid] ? dmynedges[myid] : adjchunksize * 1.1;
+      adjchunksize > dmynedges[myid] ? dmynedges[myid] : adjchunksize;
   mynvtxs = dmynvtxs[myid];
   dxadj[myid] = adj_alloc(mynvtxs+1);
   dxadj[myid][0] = 0;
@@ -3674,8 +3678,7 @@ graph_type * par_graph_distribute(
     i = dlabel[myid][v];    /* query the original vertex ID of local vertex v */
                             /* this should be strictly sequential for `block` distribution */
 
-    // while (v >= dchunkofst[myid][mynowchunk+1]) {
-    if (l > adjchunksize) {
+    if (l + xadj[i+1] - xadj[i] >= adjchunksize) {
       // dump dadjncy into file
       fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
       fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", l, fname1);
@@ -3695,7 +3698,7 @@ graph_type * par_graph_distribute(
          for `block` distribution, adjncy is always read sequentially. */
       // fetch_adjncy_chunk(mynowchunk)
 
-      k = adjncy[j];    // TODO: change data read from wildriver library
+      k = adjncy[j];
 
       // drop self-loops
       if (k == i) {
@@ -3723,16 +3726,26 @@ graph_type * par_graph_distribute(
       l++;    /* the edge array is filled sequentially; easy to slice */
     } // finish one vertex v
 
+    if (is_mmaped) {
+      madvise(adjncy+xadj[i], sizeof(vtx_type) * (xadj[i+1] - xadj[i]), MADV_DONTNEED);
+      madvise(adjwgt+xadj[i], sizeof(wgt_type) * (xadj[i+1] - xadj[i]), MADV_DONTNEED);
+    }
+
     // NOTE: a chunk DOESN'T re-number xadj (for backwards compatibility)
     dxadj[myid][v+1] = l + chunkstart;
   }
   dmynedges[myid] = dxadj[myid][mynvtxs];
 
   if (l > 0) {
-    // dump dadjncy into file
-    fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
-    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", l, fname1);
-    fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
+    if (mynowchunk == 0) {
+      // there is only one chunk; do not write to disk
+      fprintf(stderr, "%" PF_ADJ_T " edges kept resident in mem\n", l);
+    } else {
+      // dump dadjncy into file
+      fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
+      fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", l, fname1);
+      fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
+    }
 
     chunkstart += l; l = 0;
     ++mynowchunk;

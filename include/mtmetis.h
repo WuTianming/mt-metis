@@ -386,6 +386,7 @@ int mtmetis_partition_explicit(
     mtmetis_vtx_type nvtxs,
     mtmetis_adj_type const * xadj,
     mtmetis_vtx_type const * adjncy,
+    int is_mmaped,
     mtmetis_wgt_type const * vwgt,
     mtmetis_wgt_type const * adjwgt,
     double const * options,

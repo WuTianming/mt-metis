@@ -16,6 +16,7 @@
 
 
 
+#define _DEFAULT_SOURCE
 
 #include "base.h"
 #include "partition.h"
@@ -25,6 +26,8 @@
 
 #include <wildriver.h>
 
+#include <fcntl.h>
+#include <sys/mman.h>   // for mmap()
 
 
 /******************************************************************************
@@ -378,6 +381,84 @@ void count_total_deg_of_part(int argc, char ** argv) {
   exit(0);
 }
 
+int read_400M_dataset(
+    vtx_type * const r_nvtxs,
+    adj_type ** const r_xadj,
+    vtx_type ** const r_adjncy,
+    wgt_type ** const r_vwgt,
+    wgt_type ** const r_adjwgt)
+{
+  adj_type nedges;
+  FILE *meta, *f_xadj, *f_adjncy;
+
+  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
+  if (fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges) == EOF) return 0;
+  fclose(meta);
+
+  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
+
+  *r_xadj = adj_alloc(*r_nvtxs + 1);
+  f_xadj = fopen("/data1/papers400M_bidirected/400M_sparse_indptr.bin", "rb");
+  if (fread(*r_xadj, sizeof(adj_type), *r_nvtxs + 1, f_xadj) != *r_nvtxs + 1) return 0;
+  fclose(f_xadj);
+
+  *r_adjncy = vtx_alloc(nedges);
+  f_adjncy = fopen("/data1/papers400M_bidirected/400M_sparse_indices.bin", "rb");
+  if (fread(*r_adjncy, sizeof(adj_type), nedges, f_adjncy) != nedges) return 0;
+  fclose(f_xadj);
+
+  *r_adjwgt = NULL;
+  *r_vwgt = NULL;
+
+  /*
+  *r_adjwgt = wgt_alloc(nedges);
+  for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
+  vwgt = 1; vwgt = degree;
+  */
+
+  return 1;
+}
+
+int read_400M_dataset_mmap(
+    vtx_type * const r_nvtxs,
+    adj_type ** const r_xadj,
+    vtx_type ** const r_adjncy,
+    wgt_type ** const r_vwgt,
+    wgt_type ** const r_adjwgt)
+{
+  adj_type nedges;
+  FILE *meta;
+  int fd_xadj, fd_adjncy;
+
+  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
+  fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges);
+  fclose(meta);
+
+  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
+
+  fd_xadj = open("/data1/papers400M_bidirected/400M_sparse_indptr.bin", O_RDONLY);
+  size_t xadjlen = sizeof(adj_type) * (*r_nvtxs + 1);
+  *r_xadj = mmap(NULL, xadjlen, PROT_READ, MAP_PRIVATE, fd_xadj, 0);
+  close(fd_xadj);
+  // madvise(*r_xadj, xadjlen, );
+
+  fd_adjncy = open("/data1/papers400M_bidirected/400M_sparse_indices.bin", O_RDONLY);
+  size_t adjncylen = sizeof(vtx_type) * nedges;
+  *r_adjncy = mmap(NULL, adjncylen, PROT_READ, MAP_PRIVATE, fd_adjncy, 0);
+  close(fd_adjncy);
+
+  *r_adjwgt = NULL;
+  *r_vwgt = NULL;
+  // *r_adjwgt = wgt_alloc(nedges);
+  // for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
+
+  /*
+  vwgt = 1; vwgt = degree;
+  */
+
+  return 1;
+}
+
 
 /******************************************************************************
 * MAIN ************************************************************************
@@ -427,8 +508,20 @@ int main(
   dl_start_timer(&timer_input);
 
   /* read the input graph */
-  rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy, \
-      &vwgt,&adjwgt);
+  int load_400M = (strstr(input_file, "400M") != NULL);
+  int is_mmaped = load_400M ? 1 : 0;
+
+  if (load_400M) {
+    // initiate xadj, adjncy, vwgt and adjwgt
+    printf("Loading papers400M-sparse dataset...\n");
+    if (is_mmaped)
+      rv = read_400M_dataset_mmap(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+    else
+      rv = read_400M_dataset(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+  } else {
+    rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy, \
+        &vwgt,&adjwgt);
+  }
   
   /* NOTE about input structures
     arrays from the input are:
@@ -476,7 +569,7 @@ int main(
     owhere = pid_alloc(nvtxs);
   }
 
-  if (mtmetis_partition_explicit(nvtxs,xadj,adjncy,vwgt,adjwgt,options,
+  if (mtmetis_partition_explicit(nvtxs,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
       owhere,NULL) != MTMETIS_SUCCESS) {
     rv = 3;
     goto CLEANUP;

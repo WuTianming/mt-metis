@@ -727,6 +727,7 @@ graph_type * par_graph_distribute(
     size_t   adjchunksize,
     adj_type const * xadj, 
     vtx_type const * adjncy, 
+    int is_mmaped,
     wgt_type const * vwgt,
     wgt_type const * adjwgt, 
     dlthread_comm_t comm);

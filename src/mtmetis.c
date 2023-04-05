@@ -22,6 +22,7 @@
 #include "partition.h"
 #include "order.h"
 
+#include <sys/mman.h>
 
 
 
@@ -37,6 +38,7 @@ typedef struct arg_type {
   vtx_type const * adjncy;
   wgt_type const * vwgt;
   wgt_type const * adjwgt;
+  int is_mmaped;
   pid_type * where;
   wgt_type * r_obj;
 } arg_type;
@@ -91,17 +93,23 @@ static void S_launch_func(
   // graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->xadj, \
   //     arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
   graph = par_graph_distribute(ctrl->dist,arg->nvtxs,ctrl->adjchunksize,arg->xadj, \
-      arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
+      arg->adjncy,arg->is_mmaped,arg->vwgt,arg->adjwgt,ctrl->comm);
 
   // optimization:
   // free those from wildriver (read in)
 
   if (myid == 0) {
     if (arg->xadj) {
-      dl_free(arg->xadj);
+      if (arg->is_mmaped)
+        munmap(arg->xadj, sizeof(adj_type) * (graph->nvtxs+1));
+      else
+        dl_free(arg->xadj);
     }
     if (arg->adjncy) {
-      dl_free(arg->adjncy);
+      if (arg->is_mmaped)
+        munmap(arg->adjncy, sizeof(vtx_type) * graph->nedges);
+      else
+        dl_free(arg->adjncy);
     }
     if (arg->vwgt) {
       dl_free(arg->vwgt);
@@ -218,6 +226,7 @@ int mtmetis_partition_explicit(
     vtx_type const nvtxs,
     adj_type const * const xadj,
     vtx_type const * const adjncy,
+    int is_mmaped,
     wgt_type const * vwgt,
     wgt_type const * adjwgt,
     double const * const options,
@@ -265,6 +274,7 @@ int mtmetis_partition_explicit(
   arg.nvtxs = nvtxs;
   arg.xadj = xadj;
   arg.adjncy = adjncy;
+  arg.is_mmaped = is_mmaped;
   arg.vwgt = vwgt;
   if (adjwgt && ( \
         ctrl->ptype == MTMETIS_PTYPE_ND || \
@@ -365,7 +375,7 @@ int MTMETIS_PartGraphRecursive(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_RB;
   modopts[MTMETIS_OPTION_NPARTS] = *nparts;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,vwgt,adjwgt,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,adjwgt,modopts, \
       where,r_edgecut);
 
   dl_free(modopts);
@@ -397,7 +407,7 @@ int MTMETIS_PartGraphKway(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_KWAY;
   modopts[MTMETIS_OPTION_NPARTS] = *nparts;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,vwgt,adjwgt,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,adjwgt,modopts, \
       where,r_edgecut);
 
   dl_free(modopts);
@@ -428,7 +438,7 @@ int MTMETIS_NodeND(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_ND;
   modopts[MTMETIS_OPTION_NPARTS] = 3;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,vwgt,NULL,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,NULL,modopts, \
       iperm,NULL);
 
   /* generate the inverse permutation */
@@ -461,7 +471,7 @@ int MTMETIS_ComputeVertexSeparator(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_VSEP;
   modopts[MTMETIS_OPTION_NPARTS] = 3;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,vwgt,NULL,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,NULL,modopts, \
       where, sepsize);
 
   dl_free(modopts);

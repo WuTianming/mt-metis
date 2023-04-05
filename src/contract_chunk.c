@@ -400,7 +400,7 @@ static void S_par_contract_CLS_quadratic(
   size_t adjncy_chunksize = /* take min */
       ctrl->adjchunksize > gxadj[myid][gchunkofst[myid][1]] * 2
           ? gxadj[myid][gchunkofst[myid][1]] * 2
-          : ctrl->adjchunksize * 1.1;
+          : ctrl->adjchunksize;
 
   vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
@@ -534,6 +534,21 @@ static void S_par_contract_CLS_quadratic(
         DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[t][k],cdist),"%"PF_VTX_T);
 
         DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist), graph->dist),"%"PF_TID_T);
+
+        /* check if the chunk length reaches maximum */
+        size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
+        size_t deg1 = gxadj[o][v+1] - gxadj[o][v],
+               deg2 = gxadj[t][k+1] - gxadj[t][k];
+        if (chunkadjs + deg1 + deg2 >= ctrl->adjchunksize) {
+#ifdef PRINT_LOOP_VAR
+          fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunkadjs, fout1);
+#endif
+          mycchunkofst[*pchunkcnt] = c;
+          ++*pchunkcnt;
+          fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
+          fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
+        }
+
         start = cnedges;
 
         vtx_type * pcadjncy = mycadjncy - mycxadj[mycchunkofst[*pchunkcnt-1]];
@@ -621,32 +636,6 @@ static void S_par_contract_CLS_quadratic(
         }
 
         mycxadj[c+1] = cnedges;
-
-        if (mycxadj[c+1] == mycxadj[c]) {
-          k = gmatch[o][v]; t = myid;
-          if (k >= graph->mynvtxs[o]) {
-            t = gvtx_to_tid(k, graph->dist);
-            k = gvtx_to_lvtx(k, graph->dist);
-          } // now (o,v) is paired to (t,k)
-          if (!(o == t && v == k && gxadj[o][v] == gxadj[o][v + 1]) &&
-              !((o != t || v != k) && gxadj[o][v] + 1 == gxadj[o][v + 1] && gxadj[t][k] + 1 == gxadj[t][k + 1]) &&
-              !((o != t || v != k) && gxadj[o][v] == gxadj[o][v + 1] && gxadj[t][k] == gxadj[t][k + 1])
-              ) {
-            fprintf(stderr, "warning: node with no outgoing edges produced. Check the original nodes to see if there is an error!\n");
-          }
-        }
-
-        /* check if the chunk length reaches maximum */
-        size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
-        if (chunkadjs > ctrl->adjchunksize) {
-#ifdef PRINT_LOOP_VAR
-          fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunkadjs, fout1);
-#endif
-          mycchunkofst[*pchunkcnt] = c+1;
-          ++*pchunkcnt;
-          fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
-          fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
-        }
 
       } // end current coarse node c
     } // end cc2
