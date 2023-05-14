@@ -31,6 +31,7 @@
 
 
 #define par_project_graph MTMETIS_par_project_graph
+#define par_project_chunk_graph MTMETIS_par_project_chunk_graph
 /**
  * @brief Project a partitioning from a coarse graph to a fine graph.
  * 
@@ -38,6 +39,10 @@
  * @param graph The graph to project the partitioning to, from graph->coarser.
  */
 void par_project_graph(
+    ctrl_type * ctrl,
+    graph_type * graph);
+
+void par_project_chunk_graph(
     ctrl_type * ctrl,
     graph_type * graph);
 

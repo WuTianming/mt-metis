@@ -259,7 +259,7 @@ static wgt_type S_update_vertex(
 }
 
 
-static wgt_type S_move_vertex(
+static wgt_type S_move_vertex(      // uses combuffer_add
     ctrl_type * const ctrl,
     graph_type * const graph,
     tid_type const myid,
@@ -477,7 +477,7 @@ static wgt_type S_update_vertex_PW(
 }
 
 
-static wgt_type S_move_vertex_PW(
+static wgt_type S_move_vertex_PW(   // unrelated
     ctrl_type * const ctrl,
     graph_type * const graph,
     tid_type const myid,
@@ -806,7 +806,7 @@ static inline void S_par_sync_pwgts(
 }
 
 
-static vtx_type S_pfm(
+static vtx_type S_pfm(    // unrelated
     ctrl_type * const ctrl,
     graph_type * const graph,
     kwinfo_type * const * const gkwinfo,
@@ -1007,9 +1007,13 @@ static vtx_type S_par_kwayrefine_GREEDY(
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for non-chunk kwayrefine\n");
+  }
+
   vtx_type c, i, k, nmoved;
   adj_type j;
-  wgt_type gain, wgt, mycut, ewgt;
+  wgt_type gain, myvwgt, mycut, ewgt;
   pid_type to, from;
   size_t pass;
   real_type rgain;
@@ -1050,8 +1054,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
-    maxwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*ctrl->ubfactor;
-    minwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*(1.0/ctrl->ubfactor);
+    maxwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt[0]*ctrl->ubfactor;
+    minwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt[0]*(1.0/ctrl->ubfactor);
   }
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
@@ -1098,9 +1102,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
               dl_min(nparts,graph->xadj[myid][i+1]-graph->xadj[myid][i]));
 
           from = where[i];
-          wgt = vwgt[i];
+          myvwgt = vwgt[i];
 
-          if (myrinfo->id > 0 && lpwgts[from]-wgt < minwgt[from]) {
+          if (myrinfo->id > 0 && lpwgts[from]-myvwgt < minwgt[from]) {
             continue;
           }
 
@@ -1110,7 +1114,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (!S_right_side(c,to,from)) {
               continue;
             }
-            if (lpwgts[to]+wgt <= maxwgt[to]) {
+            if (lpwgts[to]+myvwgt <= maxwgt[to]) {
               if (mynbrs[k].ed >= myrinfo->id) {
                 break;
               }
@@ -1130,7 +1134,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (mynbrs[j].ed >= mynbrs[k].ed) {
               gain = mynbrs[j].ed-myrinfo->id; 
               DL_ASSERT(gain >= 0, "Invalid gain of %"PF_WGT_T,gain);
-              if ((gain > 0 && lpwgts[to]+wgt <= maxwgt[to]) \
+              if ((gain > 0 && lpwgts[to]+myvwgt <= maxwgt[to]) \
                   || (mynbrs[j].ed == mynbrs[k].ed && \
                      tpwgts[mynbrs[k].pid]*lpwgts[to] < \
                      tpwgts[to]*lpwgts[mynbrs[k].pid])) {
@@ -1145,13 +1149,13 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (!(gain > 0 || (gain == 0 \
                       && (lpwgts[from] >= maxwgt[from]  \
                           || tpwgts[to]*lpwgts[from] > \
-                          tpwgts[from]*(lpwgts[to]+wgt))))) {
+                          tpwgts[from]*(lpwgts[to]+myvwgt))))) {
               continue;
             }
           }
 
-          if (lpwgts[to] + wgt > maxwgt[to] || 
-              lpwgts[from] - wgt < minwgt[from]) {
+          if (lpwgts[to] + myvwgt > maxwgt[to] || 
+              lpwgts[from] - myvwgt < minwgt[from]) {
             /* whatever you do, don't push the red button */
             continue;
           }
@@ -1216,6 +1220,10 @@ static vtx_type S_par_kwayrefine_HS(
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for non-chunk kwayrefine\n");
+  }
+
   vtx_type c, i, k, nmoved, totalmoves, hs, h, l, lvtx, maxnhills;
   adj_type j;
   wgt_type gain, vwgt, mycut, ewgt, oldgain;
@@ -1307,8 +1315,8 @@ static vtx_type S_par_kwayrefine_HS(
 
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
-    maxwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*ctrl->ubfactor;
-    minwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*(1.0/ctrl->ubfactor);
+    maxwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt[0]*ctrl->ubfactor;
+    minwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt[0]*(1.0/ctrl->ubfactor);
   }
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
@@ -1541,12 +1549,16 @@ static vtx_type S_par_kwayrefine_HS(
 }
 
 
-static vtx_type S_par_kwayrefine_KPM(
+static vtx_type S_par_kwayrefine_KPM(   // unrelated
     ctrl_type * const ctrl, 
     graph_type * const graph,
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for non-chunk kwayrefine\n");
+  }
+
   size_t pass;
   vtx_type i, v, nmoves, k;
   pid_type side, other, offset, p, d, to, from;
@@ -1583,8 +1595,8 @@ static vtx_type S_par_kwayrefine_KPM(
 
   /* setup max/min partition weights */
   for (side=0;side<nparts;++side) {
-    maxwgt[side]  = ctrl->tpwgts[side]*graph->tvwgt*ctrl->ubfactor;
-    minwgt[side]  = ctrl->tpwgts[side]*graph->tvwgt*(1.0/ctrl->ubfactor);
+    maxwgt[side]  = ctrl->tpwgts[side]*graph->tvwgt[0]*ctrl->ubfactor;
+    minwgt[side]  = ctrl->tpwgts[side]*graph->tvwgt[0]*(1.0/ctrl->ubfactor);
   }
 
   /* allocate memory for partition boundaries */
@@ -1732,7 +1744,7 @@ vtx_type par_kwayrefine(
   nmoves = 0;
 
   switch (ctrl->rtype) {
-    case MTMETIS_RTYPE_GREEDY:
+    case MTMETIS_RTYPE_GREEDY:    // this is the default for kway
       nmoves = S_par_kwayrefine_GREEDY(ctrl,graph,ctrl->nrefpass,kwinfo);
       break;
     case MTMETIS_RTYPE_HS:

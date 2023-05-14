@@ -34,6 +34,13 @@ void par_contract_graph(
     vtx_type const * const * gmatch, 
     vtx_type const * fcmap);
 
+void par_contract_chunk_graph(
+    ctrl_type * ctrl, 
+    graph_type * graph, 
+    vtx_type mycnvtxs, 
+    vtx_type const * const * gmatch, 
+    vtx_type const * fcmap);
+
 
 
 

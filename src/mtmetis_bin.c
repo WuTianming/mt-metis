@@ -16,6 +16,7 @@
 
 
 
+#define _DEFAULT_SOURCE
 
 #include "base.h"
 #include "partition.h"
@@ -25,6 +26,8 @@
 
 #include <wildriver.h>
 
+#include <fcntl.h>
+#include <sys/mman.h>   // for mmap()
 
 
 /******************************************************************************
@@ -164,11 +167,14 @@ static const cmd_opt_t OPTS[] = {
       "for assigning vertices to threads (default=blockcyclic).", \
       CMD_OPT_CHOICE,DISTRIBUTION_CHOICES,S_ARRAY_SIZE(DISTRIBUTION_CHOICES)},
   {MTMETIS_OPTION_UBFACTOR,'b',"balance","The balance constraint " \
-      "(default=1.03, which means allowing for a 3% imbalance).", \
+      "(default=1.03, which means allowing for a 3%% imbalance).", \
       CMD_OPT_FLOAT,NULL,0},
   {MTMETIS_OPTION_ONDISK,'o',"ondisk","Store graphs to disk " \
       "during coarsening in order to reduce memory requirements (default=true).", \
       CMD_OPT_BOOL,NULL,0},
+  {MTMETIS_OPTION_ADJCHUNKSIZE,'K',"chunk","Chunk size (in Mega-edges). Only one " \
+      "chunk of all edges at a time resident in memory (default=unlimited).", \
+      CMD_OPT_INT,NULL,0},
   {MTMETIS_OPTION_PTYPE,'p',"ptype","The type of partition to compute " \
       "(default=kway)",CMD_OPT_CHOICE,PTYPE_CHOICES, \
       S_ARRAY_SIZE(PTYPE_CHOICES)},
@@ -331,7 +337,127 @@ static double * S_parse_args(
   return NULL;
 }
 
+/* calculate statistics to show if edge count is balanced */
+/* NOTE: this shouldn't be included in a git commit */
+void count_total_deg_of_part(int argc, char ** argv) {
+  vtx_type nvtxs, i;
+  adj_type * xadj = NULL; vtx_type * adjncy = NULL;
+  wgt_type * vwgt = NULL, * adjwgt = NULL;
 
+  char const * input_file = NULL, * input_parts = NULL;
+  input_file = argv[1];
+  printf("reading input graph file %s...\n", input_file);
+  int rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy,&vwgt,&adjwgt);
+  printf("stats: nvtxs = %"PF_VTX_T"\n", nvtxs);
+
+  input_parts = argv[2];
+  printf("reading input parts file %s...\n", input_parts);
+  FILE *fparts = fopen(input_parts, "r");
+
+#define DEG(k) (xadj[(k)+1] - xadj[(k)])
+
+  int part;
+  long long total[16];
+  memset(total, 0, sizeof(total));
+  for (size_t i = 0; i < nvtxs; ++i) {
+    fscanf(fparts, "%d", &part);
+    total[part] += DEG(i);
+  }
+
+  long long mx = 0;
+  double avg = 0;
+  for (int i = 0; i < 8; ++i) {
+    printf("%lld ", total[i]);
+    if (total[i] > mx) mx = total[i];
+    avg += total[i];
+  }
+  printf("\n");
+  avg /= 8;
+  printf("avg = %.1lf, max = %lld\n", avg, mx);
+  printf("max/avg = %.3lf\n", mx / avg);
+
+#undef DEG
+
+  exit(0);
+}
+
+int read_400M_dataset(
+    vtx_type * const r_nvtxs,
+    adj_type ** const r_xadj,
+    vtx_type ** const r_adjncy,
+    wgt_type ** const r_vwgt,
+    wgt_type ** const r_adjwgt)
+{
+  adj_type nedges;
+  FILE *meta, *f_xadj, *f_adjncy;
+
+  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
+  if (fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges) == EOF) return 0;
+  fclose(meta);
+
+  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
+
+  *r_xadj = adj_alloc(*r_nvtxs + 1);
+  f_xadj = fopen("/data1/papers400M_bidirected/400M_sparse_indptr.bin", "rb");
+  if (fread(*r_xadj, sizeof(adj_type), *r_nvtxs + 1, f_xadj) != *r_nvtxs + 1) return 0;
+  fclose(f_xadj);
+
+  *r_adjncy = vtx_alloc(nedges);
+  f_adjncy = fopen("/data1/papers400M_bidirected/400M_sparse_indices.bin", "rb");
+  if (fread(*r_adjncy, sizeof(adj_type), nedges, f_adjncy) != nedges) return 0;
+  fclose(f_xadj);
+
+  *r_adjwgt = NULL;
+  *r_vwgt = NULL;
+
+  /*
+  *r_adjwgt = wgt_alloc(nedges);
+  for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
+  vwgt = 1; vwgt = degree;
+  */
+
+  return 1;
+}
+
+int read_400M_dataset_mmap(
+    vtx_type * const r_nvtxs,
+    adj_type ** const r_xadj,
+    vtx_type ** const r_adjncy,
+    wgt_type ** const r_vwgt,
+    wgt_type ** const r_adjwgt)
+{
+  adj_type nedges;
+  FILE *meta;
+  int fd_xadj, fd_adjncy;
+
+  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
+  fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges);
+  fclose(meta);
+
+  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
+
+  fd_xadj = open("/data1/papers400M_bidirected/400M_sparse_indptr.bin", O_RDONLY);
+  size_t xadjlen = sizeof(adj_type) * (*r_nvtxs + 1);
+  *r_xadj = mmap(NULL, xadjlen, PROT_READ, MAP_PRIVATE, fd_xadj, 0);
+  close(fd_xadj);
+  // madvise(*r_xadj, xadjlen, );
+
+  fd_adjncy = open("/data1/papers400M_bidirected/400M_sparse_indices.bin", O_RDONLY);
+  size_t adjncylen = sizeof(vtx_type) * nedges;
+  *r_adjncy = mmap(NULL, adjncylen, PROT_READ, MAP_PRIVATE, fd_adjncy, 0);
+  close(fd_adjncy);
+
+  *r_adjwgt = NULL;
+  *r_vwgt = NULL;
+  // *r_adjwgt = wgt_alloc(nedges);
+  // for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
+
+  /*
+  vwgt = 1; vwgt = degree;
+  */
+
+  return 1;
+}
 
 
 /******************************************************************************
@@ -343,9 +469,12 @@ int main(
     int argc, 
     char ** argv) 
 {
+  // count_total_deg_of_part(argc, argv);
+
   int rv, times, verbosity;
   size_t nargs;
   vtx_type nvtxs, i;
+  int ncon = 1;
   adj_type * xadj = NULL;
   vtx_type * adjncy = NULL;
   wgt_type * vwgt = NULL, * adjwgt = NULL;
@@ -380,8 +509,27 @@ int main(
   dl_start_timer(&timer_input);
 
   /* read the input graph */
-  rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy, \
-      &vwgt,&adjwgt);
+  int load_400M = (strstr(input_file, "400M") != NULL);
+  int is_mmaped = load_400M ? 1 : 0;
+
+  if (load_400M) {
+    // initiate xadj, adjncy, vwgt and adjwgt
+    printf("Loading papers400M-sparse dataset...\n");
+    if (is_mmaped)
+      rv = read_400M_dataset_mmap(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+    else
+      rv = read_400M_dataset(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+  } else {
+    /*
+     * the vwgt array (vertex weights) is laid out as follows (example ncon=3):
+     * 0 0 0 1 1 1 2 2 2 3 3 3
+     * where "0 0 0" is the three weights/constraints of vertex 0.
+     * 
+     * the wildriver_read_graph function will allocate the vwgt array for us, and set ncon according to the input file.
+     */
+    rv = wildriver_read_graph(input_file,&nvtxs,NULL,&ncon,NULL,&xadj,&adjncy, \
+        &vwgt,&adjwgt);
+  }
   
   /* NOTE about input structures
     arrays from the input are:
@@ -412,12 +560,16 @@ int main(
   }
 
   if (options[MTMETIS_OPTION_VWGTDEGREE] != MTMETIS_VAL_OFF) {
-    if (!vwgt) {
-      vwgt = wgt_alloc(nvtxs);
-    }
+    ncon = 1;
+    if (vwgt) free(vwgt);
+    vwgt = wgt_alloc(nvtxs);
     for (i=0;i<nvtxs;++i) {
       vwgt[i] = xadj[i+1] - xadj[i];
     }
+  } else if (ncon == 0) {
+    ncon = 1;
+    if (vwgt) { free(vwgt); vwgt = NULL; }
+    // vwgt = wgt_init_alloc(1, nvtxs);
   }
 
   vprintf(verbosity,MTMETIS_VERBOSITY_LOW,"Read '%s' with %"PF_VTX_T \
@@ -429,7 +581,7 @@ int main(
     owhere = pid_alloc(nvtxs);
   }
 
-  if (mtmetis_partition_explicit(nvtxs,xadj,adjncy,vwgt,adjwgt,options,
+  if (mtmetis_partition_explicit(nvtxs,ncon,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
       owhere,NULL) != MTMETIS_SUCCESS) {
     rv = 3;
     goto CLEANUP;

@@ -38,9 +38,11 @@ void par_uncoarsen_graph(
     dl_start_timer(&ctrl->timers.uncoarsening);
   }
 
-  par_project_graph(ctrl,graph);
+  // par_project_graph(ctrl,graph);
+  par_project_chunk_graph(ctrl,graph);
 
-  par_refine_graph(ctrl,graph);
+  // par_refine_graph(ctrl,graph);
+  par_refine_chunk_graph(ctrl, graph);
 
   switch (ctrl->ptype) {
     case MTMETIS_PTYPE_VSEP:

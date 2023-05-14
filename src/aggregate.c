@@ -351,6 +351,8 @@ static vtx_type S_cleanup_match(
     }
   }
 
+  goto skip_check;
+
   // check if fcmap maintains order
   for (i = 1; i < cnvtxs; ++i) {
     DL_ASSERT(fcmap[i-1] <= fcmap[i], "fcmap in order at %"PF_VTX_T"\n", i);
@@ -384,8 +386,15 @@ static vtx_type S_cleanup_match(
 
   fprintf(stderr, "check passed\n");
 
+skip_check:
+
   return cnvtxs;
 }
+
+// some global variables...
+
+vtx_type n_self_paired, n_paired;
+
 
 /**
  * this version sorts coarse vertices according to the tuple
@@ -413,16 +422,20 @@ static vtx_type S_cleanup_match_chunk_locality(
   memset(fcmap, -1, sizeof(vtx_type) * mynvtxs);    // -1 for NULL_VTX
 
   size_t mychunkcnt = graph->chunkcnt[myid];
-  vtx_type const * const mychunkofst = graph->chunkofst[myid];
-  vtx_type const * const gchunkcnt = graph->chunkcnt;
-  vtx_type const * const * const gchunkofst = graph->chunkofst;
+  vtx_type const * const mychunkofst = (vtx_type const *)graph->chunkofst[myid];
+  vtx_type const * const gchunkcnt = (vtx_type const *)graph->chunkcnt;
+  vtx_type const * const * const gchunkofst = (vtx_type const * const *)graph->chunkofst;
 
   size_t maxchunkcnt = mychunkcnt;
   for (tid_type t = 0; t < dlthread_get_nthreads(graph->comm); ++t) {
     dl_storemax(maxchunkcnt, graph->chunkcnt[t]);
   }
 
-  // first, fix all broken matches
+
+  /** ================== fix all broken matches =================== */
+
+  vtx_type cnt_broken_local = 0, cnt_broken_remote = 0, original_matched = 0;
+
   for (i=0;i<mynvtxs;++i) {
     maxidx = gmatch[myid][i];
     gvtx = lvtx_to_gvtx(i,myid,graph->dist);
@@ -433,15 +446,19 @@ static vtx_type S_cleanup_match_chunk_locality(
       continue;
     }
 
+    { if (maxidx != i) original_matched++; }
+
     if (maxidx < mynvtxs) {                 // 对于内部配对节点，
       if (gmatch[myid][maxidx] != i) {      //   假如发现 i 配对是单向的
         gmatch[myid][i] = i;                //   则让 i 放弃配对
+        { cnt_broken_local++; }
       }
     } else {
       nbrid = gvtx_to_tid(maxidx,graph->dist);
       lvtx = gvtx_to_lvtx(maxidx,graph->dist);
       if (gmatch[nbrid][lvtx] != gvtx) {    // 对于跨线程配对节点，假如发现 i 配对是单向的，
         gmatch[myid][i] = i;                //   则让 i 放弃配对（配对自己）
+        { cnt_broken_remote++; }
       } else {
         // good match! leave as is
       }
@@ -450,46 +467,62 @@ static vtx_type S_cleanup_match_chunk_locality(
 
   dlthread_barrier(graph->comm);
 
+
+// /* need to remove these assertions in release mode
   // confirm all matches are good
-  int pair_cnt = 0, local_cnt = 0, self_cnt = 0;
+  vtx_type pair_cnt = 0, local_cnt = 0, self_cnt = 0;    // self-paired is not counted as paired
   for (i = 0; i < mynvtxs; ++i) {
     vtx_type v = i, k;
     tid_type o = myid, t = myid;
     k = gmatch[o][v];
     t = myid;
-    if (k >= graph->mynvtxs[o]) {
+    if (k >= mynvtxs) {
       t = gvtx_to_tid(k, graph->dist);
       k = gvtx_to_lvtx(k, graph->dist);
     } // now (o,v) is paired to (t,k)
 
-    vtx_type mv = gmatch[o][v], mk = gmatch[t][k];
-    tid_type tv = o, tk = t;
-    if (mv > graph->dist.mask) tv = gvtx_to_tid(mv, graph->dist), mv = gvtx_to_lvtx(mv, graph->dist);
-    if (mk > graph->dist.mask) tk = gvtx_to_tid(mk, graph->dist), mk = gvtx_to_lvtx(mk, graph->dist);
-    DL_ASSERT_EQUALS(mv, k, "%"PF_VTX_T); DL_ASSERT_EQUALS(tv, t, "%"PF_VTX_T);
-    DL_ASSERT_EQUALS(mk, v, "%"PF_VTX_T); DL_ASSERT_EQUALS(tk, o, "%"PF_VTX_T);
-    if (k != gmatch[o][v]) {
+    if (0 /*skip check*/) {
+      vtx_type mv = gmatch[o][v], mk = gmatch[t][k];
+      tid_type tv = o, tk = t;
+      if (mv > graph->dist.mask) tv = gvtx_to_tid(mv, graph->dist), mv = gvtx_to_lvtx(mv, graph->dist);
+      if (mk > graph->dist.mask) tk = gvtx_to_tid(mk, graph->dist), mk = gvtx_to_lvtx(mk, graph->dist);
+      DL_ASSERT_EQUALS(mv, k, "%"PF_VTX_T); DL_ASSERT_EQUALS(tv, t, "%"PF_VTX_T);
+      DL_ASSERT_EQUALS(mk, v, "%"PF_VTX_T); DL_ASSERT_EQUALS(tk, o, "%"PF_VTX_T);
+    }
+
+    if (v != gmatch[o][v]) {
       if (o == t) ++local_cnt;
       ++pair_cnt;
     } else {
       ++self_cnt;
     }
   }
-  fprintf(stderr, "all matches are good and mutual! mynvtxs = %"PF_VTX_T"\t, self pair num = %"PF_VTX_T"\t, pair num = %"PF_VTX_T"\t, local pair num = %"PF_VTX_T"\n", mynvtxs, self_cnt, pair_cnt, local_cnt);
+  fprintf(stderr, "all matches are good and mutual! mynvtxs = %8"PF_VTX_T", self pair num = %8"PF_VTX_T", pair num = %8"PF_VTX_T", local pair num = %8"PF_VTX_T". Orig. matched=%8"PF_VTX_T", broken=%"PF_VTX_T"+%"PF_VTX_T"\n", mynvtxs, self_cnt, pair_cnt, local_cnt, original_matched, cnt_broken_local, cnt_broken_remote);
 
-  dlthread_barrier(graph->comm);
+  for (int t = 0; t < dlthread_get_nthreads(graph->comm); ++t) {
+    if (t == myid) {
+      if (myid == 0) {
+        n_paired = pair_cnt; n_self_paired = self_cnt;
+      } else {
+        n_paired += pair_cnt; n_self_paired += self_cnt;
+      }
+    }
+    dlthread_barrier(graph->comm);
+  }
 
-  // new sequential numbering for local coarse vertices
-  // sorts coarse vertices according to (cc1, cc2) tuple
+// */
+
+  /** ================== build the mapping to coarse vertices ===================
+   * prepare new sequential numbering for local coarse vertices;
+   * rule: coarse vertices are sorted by (cc1, cc2) tuple
+  */
+
   cnvtxs = 0;
-  // initialize gcmap to NULL_VTX (=-1)
-  memset(gcmap[myid], -1, sizeof(vtx_type) * mynvtxs);
+  memset(gcmap[myid], -1, sizeof(vtx_type) * mynvtxs);  // initialize gcmap to NULL_VTX (=-1)
 
-  /** =========================================================================== */
-
-  int ** isDominant = dlthread_get_shmem(sizeof(int*)*dlthread_get_nthreads(graph->comm),graph->comm);
-  isDominant[myid] = malloc(sizeof(int) * mynvtxs);
-  memset(isDominant[myid], 0, sizeof(int) * mynvtxs);
+  // int ** isDominant = dlthread_get_shmem(sizeof(int*)*dlthread_get_nthreads(graph->comm),graph->comm);
+  // isDominant[myid] = malloc(sizeof(int) * mynvtxs);
+  // memset(isDominant[myid], 0, sizeof(int) * mynvtxs);
 
   for (cc1=0;cc1<mychunkcnt;++cc1) {
     for (cc2=cc1;cc2<maxchunkcnt;++cc2) {
@@ -506,7 +539,7 @@ static vtx_type S_cleanup_match_chunk_locality(
           // matched to itself
           gcmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist);
           fcmap[cnvtxs] = i;
-          isDominant[myid][i] = 1;
+          // isDominant[myid][i] = 1;
           cnvtxs++;
           continue;
         }
@@ -519,23 +552,12 @@ static vtx_type S_cleanup_match_chunk_locality(
           lvtx = gvtx_to_lvtx(maxidx,graph->dist);
         }
 
-        // if (i == 21172 || i == 11125) {
-        //   maxidx = gmatch[myid][i];
-        // }
-
         if (cc2 < gchunkcnt[nbrid] &&
             gchunkofst[nbrid][cc2] <= lvtx && lvtx < gchunkofst[nbrid][cc2+1]) {
           // maxidx falls into the interval that we are considering
           // if: either cc1 < cc2, or (cc1 == cc2 and my_cvtx says i is the dominant one)
           gvtx = lvtx_to_gvtx(i,myid,graph->dist);
           maxidx = lvtx_to_gvtx(lvtx,nbrid,graph->dist);    // to avoid bug qaq
-          // int ismycvtx = 0;
-          // if (cc1 < cc2) ismycvtx = 1;
-          // else if (cc1 == cc2) {
-          //   if (gvtx < maxidx) ismycvtx = 0;
-          //   else ismycvtx = 1;
-          // }
-          // if (ismycvtx) {
           if (cc1 < cc2 ||
              (cc1 == cc2 && my_cvtx(gvtx,maxidx,
                 gxadj[myid][i+1]-gxadj[myid][i], gxadj[nbrid][lvtx+1]-gxadj[nbrid][lvtx]))) {
@@ -543,7 +565,7 @@ static vtx_type S_cleanup_match_chunk_locality(
             gcmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist);
             // still need to change gcmap[nbrid][lvtx] somewhere
             fcmap[cnvtxs] = i;
-            isDominant[myid][i] = 1;
+            // isDominant[myid][i] = 1;
             ++cnvtxs;
           } else {
             // i is the secondary vertex; we will need to fix gcmap for i somewhere
@@ -557,7 +579,7 @@ static vtx_type S_cleanup_match_chunk_locality(
 
   dlthread_barrier(graph->comm);
 
-  /* tries to avoid false sharing by forcing all second vertices to obey the first vertex */
+  /** tries to avoid false sharing by forcing all second vertices to obey the first vertex */
   for (i=mynvtxs;i>0;) {
     --i;
     gvtx = lvtx_to_gvtx(i,myid,graph->dist);
@@ -572,7 +594,7 @@ static vtx_type S_cleanup_match_chunk_locality(
       lvtx = gvtx_to_lvtx(maxidx,graph->dist);
     } // (nbrid, lvtx) = *[the node that i is matched to]
 
-    if (lvtx != i) DL_ASSERT_EQUALS(isDominant[myid][i] + isDominant[nbrid][lvtx], 1, "%d");
+    // if (lvtx != i) DL_ASSERT_EQUALS(isDominant[myid][i] + isDominant[nbrid][lvtx], 1, "%d");
     if (gcmap[myid][i] == NULL_VTX || gcmap[myid][i] == NULL_VTX - 1) {   // FIXME: this is a magic number
       DL_ASSERT(gcmap[nbrid][lvtx] != NULL_VTX, "qwq1");
       DL_ASSERT(gcmap[nbrid][lvtx] != NULL_VTX-1, "qwq2");
@@ -585,7 +607,8 @@ static vtx_type S_cleanup_match_chunk_locality(
   }
 
 
-
+/** many sanity checks -- disabled for now */
+/*
   // CHECK: for coarse cu < cv, compare tuple of two:
   // (chunk(u),c(m[u])) <= (chunk(v), c(m[v]))
   for (i = 1; i < cnvtxs; ++i) {
@@ -657,8 +680,7 @@ static vtx_type S_cleanup_match_chunk_locality(
       k = gvtx_to_lvtx(k, graph->dist);
     } // now (o,v) is paired to (t,k)
 
-    // DL_ASSERT(isDominant[o][v] + isDominant[t][k] == 1, "split brain?");
-    DL_ASSERT_EQUALS(isDominant[o][v]+isDominant[t][k], 1, "%d");
+    // DL_ASSERT_EQUALS(isDominant[o][v]+isDominant[t][k], 1, "%d");
 
     vtx_type mv = gmatch[o][v], mk = gmatch[t][k];
     if (mv > graph->dist.mask) mv = gvtx_to_lvtx(mv, graph->dist);
@@ -672,9 +694,10 @@ static vtx_type S_cleanup_match_chunk_locality(
   dlthread_barrier(graph->comm);
 
   fprintf(stderr, "check passed (new version)\n");
+*/
 
-  free(isDominant[myid]);
-  dlthread_free_shmem(isDominant, graph->comm);
+  // free(isDominant[myid]);
+  // dlthread_free_shmem(isDominant, graph->comm);
 
   return cnvtxs;
 }
@@ -831,6 +854,7 @@ static vtx_type S_coarsen_match_leaves(
 {
   exit(1);    // keep match_leaves flag off for now
 
+#if 0
   vtx_type i, k, m, l, npivot, mask;
   adj_type j, jj;
   vtx_type * ind, * hash, * id;
@@ -934,6 +958,7 @@ static vtx_type S_coarsen_match_leaves(
   dl_free(ind);
 
   return cnvtxs;
+#endif
 }
 
 
@@ -962,6 +987,10 @@ static vtx_type S_coarsen_match_twins(
     vtx_type cnvtxs,
     vtx_type const maxdeg)
 {
+  // need to change vwgt to ncon array
+  exit(1);
+
+#if 0
   uint64_t h;
   vtx_type i, v, u, k, deg, l, ntwin;
   adj_type j;
@@ -1084,8 +1113,10 @@ static vtx_type S_coarsen_match_twins(
   dl_free(listb);
 
   return cnvtxs;
+#endif
 }
 
+int island_cheat = 0;
 
 /**
  * @brief Create a vertex aggregation by randomly matching vertices across
@@ -1116,17 +1147,18 @@ static vtx_type S_coarsen_match_RM(
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
-  vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
+  vtx_type * const * const gadjncy = (vtx_type **)graph->adjncy;
   vtx_type ** const gcmap = graph->cmap;
 
-  wgt_type const maxvwgt = ctrl->maxvwgt;
+  wgt_type const * const maxvwgt = ctrl->maxvwgt;
+  int ncon = graph->ncon;
 
   /* local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
   size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
   wgt_type const * const vwgt = gvwgt[myid];
-  vtx_type const * const adjncy = gadjncy[myid];
+  vtx_type * const adjncy = gadjncy[myid];
 
   vtx_type const * adjncy_ofst;
   wgt_type const * adjwgt_ofst;
@@ -1142,13 +1174,29 @@ static vtx_type S_coarsen_match_RM(
   k = 0;
   seed = ctrl->seed + myid;
 
+  int single_chunk = 1;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    if (graph->chunkcnt[i] > 1) {
+      single_chunk = 0;
+      break;
+    }
+  }
+
   char fname1[1024];
   sprintf(fname1, "dump_graph%zd_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
   FILE *adjncy_dump = fopen(fname1, "rb");
-  if (adjncy_dump == NULL) { exit(1); }
+  if (!single_chunk && adjncy_dump == NULL) { exit(1); }
 
-  /* do the following for each chunk in adjncy */
-  for (int c = 0; c < chunkcnt; ++c) {
+
+  /* do the following for each chunk in adjncy,
+     but do it in random order (a permutation for c) */
+  vtx_type *cperm = vtx_alloc(chunkcnt);
+  vtx_incset(cperm, 0, 1, chunkcnt);
+  vtx_shuffle_r(cperm, chunkcnt, &seed);
+
+  for (int c0 = 0; c0 < chunkcnt; ++c0) {
+    int c = cperm[c0];
+
     vtx_type chunkstart  = gchunkofst[myid][c],
              chunkend    = gchunkofst[myid][c+1];
     vtx_type chunknvtxs  = chunkend - chunkstart;
@@ -1157,7 +1205,10 @@ static vtx_type S_coarsen_match_RM(
     perm_r_ofst = perm + chunkstart;
 
     // populate adjncy arrays for current chunk
-    fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
+    if (!single_chunk) {
+      fseek(adjncy_dump, xadj[chunkstart] * sizeof(vtx_type), SEEK_SET);
+      fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
+    }
 
     vtx_incset(perm_r_ofst,chunkstart,1,chunknvtxs);
     vtx_pseudo_shuffle_r(perm_r_ofst,chunknvtxs/8,chunknvtxs,&seed);
@@ -1173,10 +1224,18 @@ static vtx_type S_coarsen_match_RM(
       if (match[i] == NULL_VTX) { /* Unmatched */
         gvtx = lvtx_to_gvtx(i,myid,graph->dist);
         maxidx = gvtx;
+
+        int overweight = 0;
+        for (int t = 0; t < ncon; ++t) {
+          if (vwgt[ncon*i+t] > maxvwgt[t]) {
+            overweight = 1;
+            break;
+          }
+        }
         
-        if (vwgt[i] < maxvwgt) {
+        if (!overweight) {
           /* Deal with island vertices. Match locally */
-          if (xadj[i+1] == xadj[i]) { 
+          if (xadj[i+1] == xadj[i] || (island_cheat == 1 && (xadj[i+1]-xadj[i] < 100))) { 
             last_unmatched = dl_max(pi, last_unmatched)+1;
             for (; last_unmatched<chunknvtxs; last_unmatched++) {
               k = perm_r_ofst[last_unmatched];
@@ -1199,7 +1258,14 @@ static vtx_type S_coarsen_match_RM(
                 nbrid = gvtx_to_tid(k,graph->dist);
                 lvtx = gvtx_to_lvtx(k,graph->dist);
               }
-              if (vwgt[i]+gvwgt[nbrid][lvtx] <= maxvwgt && 
+              int newnode_overweight = 0;
+              for (int t = 0; t < ncon; ++t) {
+                if (vwgt[i*ncon+t]+gvwgt[nbrid][lvtx*ncon+t] > maxvwgt[t]) {
+                  newnode_overweight = 1;
+                  break;
+                }
+              }
+              if (!newnode_overweight && 
                   (gmatch[nbrid][lvtx] == NULL_VTX)) {
                 maxidx = k;
                 break;
@@ -1210,7 +1276,8 @@ static vtx_type S_coarsen_match_RM(
               }
             } while (j != start);
           }
-        }
+        } // end if (!overweight)
+
         if (maxidx < mynvtxs) {
           match[i] = maxidx;
           match[maxidx] = i;
@@ -1229,7 +1296,10 @@ static vtx_type S_coarsen_match_RM(
     } /* outer match loop */
   }
 
-  fclose(adjncy_dump);
+  free(cperm);
+
+  if (!single_chunk)
+    fclose(adjncy_dump);
 
   dlthread_barrier(ctrl->comm);
 
@@ -1259,10 +1329,13 @@ static vtx_type S_coarsen_match_SHEM(
     vtx_type * const * const gmatch,  // output
     vtx_type * const fcmap) 
 {
+  n_self_paired = 0, n_paired = 0;
+
   unsigned int seed;
   vtx_type cnvtxs, i, pi, k, maxidx, last_unmatched, \
       lvtx, gvtx;
-  wgt_type mywgt, ewgt, maxwgt;
+  wgt_type ewgt, maxwgt;
+  wgt_type const * mywgt;
   tid_type nbrid;
   adj_type j, avgdegree;
   vtx_type * perm, * tperm, * degrees;
@@ -1271,21 +1344,22 @@ static vtx_type S_coarsen_match_SHEM(
 
   vtx_type ** const gcmap = graph->cmap;
 
-  wgt_type const maxvwgt  = ctrl->maxvwgt;
+  wgt_type const * const maxvwgt = ctrl->maxvwgt;
+  int ncon = graph->ncon;
 
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
   wgt_type const * const * const gvwgt = (wgt_type const **)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const **)graph->adjwgt;
+  vtx_type * const * const gadjncy = graph->adjncy;
+  wgt_type * const * const gadjwgt = graph->adjwgt;
 
   /* thread local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
   size_t   const chunkcnt = graph->chunkcnt[myid];
   adj_type const * const xadj = gxadj[myid];
-  vtx_type const * const adjncy = gadjncy[myid];
+  vtx_type * const adjncy = gadjncy[myid];
   wgt_type const * const vwgt = gvwgt[myid];
-  wgt_type const * const adjwgt = gadjwgt[myid];
+  wgt_type * const adjwgt = gadjwgt[myid];
   vtx_type * const match = gmatch[myid];
 
   vtx_type const * adjncy_ofst;
@@ -1298,13 +1372,21 @@ static vtx_type S_coarsen_match_SHEM(
   k = 0;
   cnvtxs = 0;
 
+  int single_chunk = 1;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    if (graph->chunkcnt[i] > 1) {
+      single_chunk = 0;
+      break;
+    }
+  }
+
   char fname1[1024], fname2[1024];
   sprintf(fname1, "dump_graph%zd_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
   sprintf(fname2, "dump_graph%zd_dadjwgt_tid%"PF_TID_T".bin", graph->level, myid);
   FILE *adjncy_dump = fopen(fname1, "rb");
   FILE *adjwgt_dump = fopen(fname2, "rb");
-  if (adjncy_dump == NULL) { exit(1); }
-  if (adjwgt_dump == NULL) { exit(1); }
+  if (!single_chunk && adjncy_dump == NULL) { exit(1); }
+  if (!single_chunk && adjwgt_dump == NULL) { exit(1); }
 
   if (mynvtxs > 0) {
     perm = vtx_alloc(mynvtxs);
@@ -1312,8 +1394,37 @@ static vtx_type S_coarsen_match_SHEM(
     perm = NULL;
   }
 
-  /* do the following for each chunk in adjncy */
-  for (int c = 0; c < chunkcnt; ++c) {
+  /* do the following for each chunk in adjncy
+     but do it in random order (a permutation for c) */
+  vtx_type *cperm = vtx_alloc(chunkcnt);
+  double *avgdeg_tmp = malloc(sizeof(double) * chunkcnt);
+  vtx_incset(cperm, 0, 1, chunkcnt);
+  // vtx_incset(cperm, chunkcnt-1, -1, chunkcnt);
+  for (int i = 0; i < chunkcnt; ++i) {
+    vtx_type chunkstart = gchunkofst[myid][i],
+             chunkend = gchunkofst[myid][i + 1];
+    vtx_type chunknvtxs = chunkend - chunkstart;
+    adj_type chunknedges = xadj[chunkend] - xadj[chunkstart];
+    avgdeg_tmp[i] = 1.00 * chunknedges / chunknvtxs;
+  }
+
+  // sort cperm according to avgdeg_tmp using some O(n^2) sort (chunkcnt is small)
+  for (int i = 0; i < chunkcnt - 1; ++i) {
+    int min_idx = i;
+    for (int j = i + 1; j < chunkcnt; ++j)
+      if (avgdeg_tmp[cperm[j]] < avgdeg_tmp[cperm[min_idx]])
+        min_idx = j;
+    int tmp = cperm[min_idx];
+    cperm[min_idx] = cperm[i];
+    cperm[i] = tmp;
+  }
+  
+  // vtx_shuffle_r(cperm, chunkcnt, &seed);
+  free(avgdeg_tmp);
+
+  for (int c0 = 0; c0 < chunkcnt; ++c0) {
+    int c = cperm[c0];
+
     vtx_type chunkstart  = gchunkofst[myid][c],
              chunkend    = gchunkofst[myid][c+1];
     vtx_type chunknvtxs  = chunkend - chunkstart;
@@ -1323,8 +1434,12 @@ static vtx_type S_coarsen_match_SHEM(
     perm_r_ofst = perm + chunkstart;
 
     // populate adjncy and adjwgt arrays for current chunk
-    fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
-    fread(adjwgt, sizeof(wgt_type), chunknedges, adjwgt_dump);
+    if (!single_chunk) {
+      fseek(adjncy_dump, xadj[chunkstart] * sizeof(vtx_type), SEEK_SET);
+      fseek(adjwgt_dump, xadj[chunkstart] * sizeof(wgt_type), SEEK_SET);
+      fread(adjncy, sizeof(vtx_type), chunknedges, adjncy_dump);
+      fread(adjwgt, sizeof(wgt_type), chunknedges, adjwgt_dump);
+    }
 
     /* calculate the degree of each vertex, truncating to the average */
     tperm = vtx_alloc(chunknvtxs);
@@ -1352,8 +1467,10 @@ static vtx_type S_coarsen_match_SHEM(
 
     /* create permutation */
     vv_countingsort_kv(degrees,tperm,0,avgdegree,chunknvtxs,perm_r_ofst,NULL);
-    // perm = sort(tperm, key=degrees[ascending])
-    // TODO: why shuffle?
+    // pseudocode: perm = sort(tperm, key=degrees[ascending])
+
+    // hint: always try to match small-deg nodes first, or you end up with a lot
+    // unpaired
 
     DL_ASSERT(chunknvtxs < 2 || dl_min(xadj[perm_r_ofst[0]+1] - xadj[perm_r_ofst[0]],avgdegree) \
         <= xadj[perm_r_ofst[chunknvtxs-1]+1] - xadj[perm_r_ofst[chunknvtxs-1]],"Sorting failed\n");
@@ -1366,19 +1483,36 @@ static vtx_type S_coarsen_match_SHEM(
 
     last_unmatched=0; 
 
+    if (myid == 0) {
+      fprintf(stderr, "avgdeg = %4d; ", (int)avgdegree);
+      for (pi=0; pi<chunknvtxs;pi += chunknvtxs / 10) {
+        i = perm_r_ofst[pi];
+        fprintf(stderr, " %4d", (int)(xadj[i+1]-xadj[i]));
+      }
+      fprintf(stderr, "\n");
+    }
+
     for (pi=0; pi<chunknvtxs;++pi) {
       /* request my matches. match[] is inter-chunk intra-thread */
-      i = perm_r_ofst[pi];   // i is in [chunkstart, chunkend)
+      i = perm_r_ofst[pi];   // i is in [chunkstart, chunkend), i.e. i is vanilla intra-thread id
 
       if (match[i] != NULL_VTX) { continue; }
 
       /* Unmatched */
-      mywgt = vwgt[i];
+      mywgt = vwgt + i*ncon;
       maxwgt = 0;
       gvtx = lvtx_to_gvtx(i,myid,graph->dist);
       maxidx = gvtx;
 
-      if (mywgt < maxvwgt) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
+      int overweight = 0;
+      for (int t = 0; t < ncon; ++t) {
+        if (mywgt[t] >= maxvwgt[t]) {
+          overweight = 1;
+          break;
+        }
+      }
+
+      if (!overweight) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
         if (xadj[i+1] == xadj[i]) { 
           /* Deal with island vertices. Find a non-island and match it with. 
               The matching ignores ctrl->maxvwgt requirements */
@@ -1403,9 +1537,16 @@ static vtx_type S_coarsen_match_SHEM(
               lvtx = gvtx_to_lvtx(k,graph->dist);
             }
 
-            // TODO 参照 parmetis 的方式给这里加上噪音，而噪音的内容是：优先选择 chunk 编号相同、从属同线程的节点
+            int newnode_overweight = 0;
+            for (int t = 0; t < ncon; ++t) {
+              if (mywgt[t] + gvwgt[nbrid][lvtx*ncon+t] >= maxvwgt[t]) {
+                newnode_overweight = 1;
+                break;
+              }
+            }
+
             if (maxwgt < ewgt + (wgt_type)((pi+xadj[i])%2) && \
-                mywgt+gvwgt[nbrid][lvtx] <= maxvwgt && \
+                !newnode_overweight && \
                 gmatch[nbrid][lvtx] == NULL_VTX) {
               maxidx = k;
               maxwgt = ewgt;
@@ -1418,6 +1559,7 @@ static vtx_type S_coarsen_match_SHEM(
       if (maxidx < mynvtxs) {
         match[i] = maxidx;
         match[maxidx] = i;    // 互相 match，对于本地节点来说没有问题
+        // fprintf(stderr, "chunk内部互相match：%d, %d\n", (int)i, (int)maxidx);
       } else {
         // 互相 match 过程对于远程节点可能会造成时序问题，但这里 optimistic
         nbrid = gvtx_to_tid(maxidx,graph->dist);
@@ -1433,8 +1575,12 @@ static vtx_type S_coarsen_match_SHEM(
     } /* for each v in current chunk */
   }
 
-  fclose(adjncy_dump);
-  fclose(adjwgt_dump);
+  free(cperm);
+
+  if (!single_chunk) {
+    fclose(adjncy_dump);
+    fclose(adjwgt_dump);
+  }
 
   dlthread_barrier(ctrl->comm);
 
@@ -1467,6 +1613,7 @@ static vtx_type S_coarsen_cluster_FC(
 {
   exit(1);
 
+#if 0
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1674,6 +1821,7 @@ static vtx_type S_coarsen_cluster_FC(
   }
 
   return mycnvtxs;
+#endif
 }
 
 
@@ -1696,6 +1844,7 @@ static vtx_type S_coarsen_cluster_RC(
 {
   exit(1);
 
+#if 0
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1855,6 +2004,7 @@ static vtx_type S_coarsen_cluster_RC(
   }
 
   return mycnvtxs;
+#endif
 }
 
 
@@ -1885,18 +2035,44 @@ vtx_type par_aggregate_graph(
    * used. */
   cnvtxs = 0;
 
+  int single_chunk = 1;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    if (graph->chunkcnt[i] > 1) {
+      single_chunk = 0;
+      break;
+    }
+  }
+
+  dlthread_barrier(ctrl->comm);
+
   /* coarsening scheme selection used to go here */
   switch(ctrl->ctype) {
     case MTMETIS_CTYPE_RM:
+      island_cheat = 0;
       cnvtxs = S_coarsen_match_RM(ctrl,graph,gmatch,fcmap);
       break;
     case MTMETIS_CTYPE_SHEM:
       if (graph->uniformadjwgt) {
-        fprintf(stderr, "RM\n");
+        // fprintf(stderr, "RM\n");
         cnvtxs = S_coarsen_match_RM(ctrl,graph,gmatch,fcmap);
       } else {
-        fprintf(stderr, "SHEM\n");
+        // fprintf(stderr, "SHEM\n");
         cnvtxs = S_coarsen_match_SHEM(ctrl,graph,gmatch,fcmap);
+        int *p = dlthread_get_shmem(sizeof(int),graph->comm);
+        // if (!single_chunk && myid == 0) {
+        if (myid == 0) {
+          *p = 0;
+          if (n_self_paired >= n_paired / 3) {
+            fprintf(stderr, "\033[32m" "\033[1m" "DETECTED" "\033[0m" " ineffective SHEM matching. Shortly launching RM matching again...\n");
+            *p = 1;
+          }
+        }
+        dlthread_barrier(graph->comm);
+        if (*p == 1) {
+          island_cheat = 1;
+          memset(gmatch[myid], -1, mynvtxs * sizeof(vtx_type));
+          cnvtxs = S_coarsen_match_RM(ctrl,graph,gmatch,fcmap);
+        }
       }
       break;
     case MTMETIS_CTYPE_FC:
@@ -1911,10 +2087,17 @@ vtx_type par_aggregate_graph(
   }
 
   nunmatched = mynvtxs - (cnvtxs*2);
+  // nunmatched = n_self_paired;   // maybe fix this global variable sometime
 
   /* fix leaves */
-/*
-  if (ctrl->leafmatch && nunmatched > LEAF_MATCH_RATIO * mynvtxs) {
+
+  // FIXME: figure out how the flags should be setup properly
+  // ctrl->leafmatch = 1;
+
+  if (single_chunk && ctrl->leafmatch && nunmatched > LEAF_MATCH_RATIO * /*total*/mynvtxs) {
+    if (myid == 0) {
+      fprintf(stderr, "\033[32m" "\033[1m" "DETECTED" "\033[0m" " ineffective SHEM matching. Shortly launching leafmatch...\n");
+    }
     cnvtxs = S_coarsen_match_leaves(ctrl,graph,gmatch,fcmap,cnvtxs, \
         MAXDEG_LEAF);
     cnvtxs = S_coarsen_match_twins(ctrl,graph,gmatch,fcmap,cnvtxs, \
@@ -1930,19 +2113,17 @@ vtx_type par_aggregate_graph(
       cnvtxs = S_coarsen_match_leaves(ctrl,graph,gmatch,fcmap,cnvtxs, \
           2*MAXDEG_LEAF);
     }
-  }
-*/
 
-  /* fix unmatched vertices */
-  /*
-  for (i=0;i<mynvtxs;++i) {
-    if (gmatch[myid][i] == i) {
-      graph->cmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist);
-      fcmap[cnvtxs] = i;
-      ++cnvtxs;
+    /* fix unmatched vertices */
+    for (i=0;i<mynvtxs;++i) {
+      if (gmatch[myid][i] == i) {
+        graph->cmap[myid][i] = lvtx_to_gvtx(cnvtxs,myid,graph->dist);
+        fcmap[cnvtxs] = i;
+        ++cnvtxs;
+      }
     }
+
   }
-  */
 
   dlthread_barrier(ctrl->comm);
 

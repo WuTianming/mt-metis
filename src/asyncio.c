@@ -1,4 +1,5 @@
 #include "asyncio.h"
+#include "metislib.h"
 #include "string.h"
 
 static void S_ser_write_to_disk(
@@ -9,10 +10,11 @@ static void S_ser_write_to_disk(
 
   // size_t size_before = graph_size(graph);
 
-  vtx_type *nvtxs, *nedges, ncon;
+  vtx_type *nvtxs, ncon;
+  adj_type *nedges;
   tid_type nthreads = ctrl->nthreads;
   char outfile[1024];
-  FILE *fpout;
+  FILE *fpout, *metaout;
 
   // only save the first 3 graphs provides acceptable memory peak
   // if (gID >= 4) { return; }
@@ -22,26 +24,66 @@ static void S_ser_write_to_disk(
     gk_rmpath(outfile);
   }
 
-  graph->gID    = gID++;
-  sprintf(outfile, "dump_mtmetis.%d", graph->gID);
+  graph->gID = gID++;
 
-  if ((fpout = fopen(outfile, "wb")) == NULL)
-    abort();
+  sprintf(outfile, "dump_mtmetis.%d", graph->gID);
+  if ((fpout = fopen(outfile, "wb")) == NULL) abort();
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
+  ncon   = graph->ncon;     // now supports multiple constraints!
+
+  {
+    // FIXME: re-allocate when attempting to read back
+    for (int myid = 0; myid < nthreads; ++myid) {
+      if (!graph->free_adjncy) {
+        dl_free(graph->adjncy[myid]);
+        graph->adjncy[myid] = NULL;
+      }
+      if (!graph->free_adjwgt) {
+        dl_free(graph->adjwgt[myid]);
+        graph->adjwgt[myid] = NULL;
+      }
+    }
+  }
+
+  sprintf(outfile, "dump_meta.%d.txt", graph->gID);
+  if ((metaout = fopen(outfile, "w")) == NULL) abort();
+
+  // TODO: dump metadata to facilitate checkpointing
+  fprintf(metaout, "%d %d %d %d %d %d %d %d %d %d\n", graph->gID, (int)nthreads,
+          (int)ncon, graph->uniformadjwgt, graph->uniformvwgt,
+          graph->free_adjncy, graph->free_adjwgt, graph->free_vsize,
+          graph->free_vwgt, graph->free_xadj);
+
+  for (int i = 0; i < nthreads; ++i)
+    fprintf(metaout, " %"PF_VTX_T, nvtxs[i]);
+  fprintf(metaout, "\n");
+
+  for (int i = 0; i < nthreads; ++i)
+    fprintf(metaout, " %"PF_ADJ_T, nedges[i]);
+  fprintf(metaout, "\n");
+
+  for (int i = 0; i < nthreads; ++i)
+    fprintf(metaout, " %zu", graph->chunkcnt[i]);
+  fprintf(metaout, "\n");
+
+  for (int i = 0; i < nthreads; ++i) {
+    for (int j = 0; j <= graph->chunkcnt[i]; ++j) {
+      fprintf(metaout, " %zu", graph->chunkofst[i][j]);
+    }
+    fprintf(metaout, "\n");
+  }
+  fprintf(metaout, "\n");
+  fclose(metaout);
 
   if (graph->free_xadj) {
     for (int myid = 0; myid < nthreads; ++myid) {
       if (fwrite(graph->xadj[myid], sizeof(adj_type), nvtxs[myid]+1, fpout) != (size_t)(nvtxs[myid]+1))
         abort();
-        // goto ERROR;
       dl_free(graph->xadj[myid]);
       graph->xadj[myid] = NULL;
     }
-    // dl_free(graph->xadj);
-    // graph->xadj = NULL;
   }
   if (graph->free_vwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -50,8 +92,6 @@ static void S_ser_write_to_disk(
       dl_free(graph->vwgt[myid]);
       graph->vwgt[myid] = NULL;
     }
-    // dl_free(graph->vwgt);
-    // graph->vwgt = NULL;
   }
   if (graph->free_adjncy) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -60,8 +100,6 @@ static void S_ser_write_to_disk(
       dl_free(graph->adjncy[myid]);
       graph->adjncy[myid] = NULL;
     }
-    // dl_free(graph->adjncy);
-    // graph->adjncy = NULL;
   }
   if (graph->free_adjwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -70,8 +108,6 @@ static void S_ser_write_to_disk(
       dl_free(graph->adjwgt[myid]);
       graph->adjwgt[myid] = NULL;
     }
-    // dl_free(graph->adjwgt);
-    // graph->adjwgt = NULL;
   }
 
   fclose(fpout);
@@ -102,25 +138,90 @@ ERROR:
   // graph->ondisk = 0;
 }
 
+/**
+ * intended use case:
+ *   graph = par_graph_create(comm);
+ *   graph = recover_metadata(ctrl, graph, gid);
+*/
+graph_type *  S_ser_recover_graph_metadata(
+    ctrl_type * const ctrl,
+    graph_type * graph,
+    int gID) {
+
+  exit(1);    // this function is unfinished
+
+  vtx_type *nvtxs, ncon;
+  adj_type *nedges;
+  tid_type nthreads = ctrl->nthreads;
+  char infile[1024];
+  FILE *metaout;
+
+  // FIXME: refer to graph.c:3572, par_graph_distribute()
+  /** NOTE:
+   * need to set graph->ondisk != RESIDENT
+  */
+
+  nvtxs  = graph->mynvtxs;
+  nedges = graph->mynedges;
+  ncon   = graph->ncon;     // TODO: this should be read from the metadata file
+
+  sprintf(infile, "dump_meta.%d.txt", graph->gID);
+  if ((metaout = fopen(infile, "r")) == NULL) {
+    dl_error("cannot open metadata file for graph recovery\n");
+  }
+
+  fscanf(metaout, "%d %"PF_TID_T" %"PF_VTX_T" %d %d %d %d %d %d %d", &graph->gID, &nthreads,
+         &ncon, &graph->uniformadjwgt, &graph->uniformvwgt,
+         &graph->free_adjncy, &graph->free_adjwgt, &graph->free_vsize,
+         &graph->free_vwgt, &graph->free_xadj);
+  
+  if (nthreads != ctrl->nthreads) { abort(); }
+
+  for (int i = 0; i < nthreads; ++i)
+    fscanf(metaout, "%"PF_VTX_T, &nvtxs[i]);
+
+  for (int i = 0; i < nthreads; ++i)
+    fscanf(metaout, "%"PF_ADJ_T, &nedges[i]);
+
+  for (int i = 0; i < nthreads; ++i)
+    fscanf(metaout, "%zu", &graph->chunkcnt[i]);
+
+  for (int i = 0; i < nthreads; ++i) {
+    graph->chunkofst[i] = vtx_alloc(graph->chunkcnt[i] + 2);
+
+    for (int j = 0; j <= graph->chunkcnt[i]; ++j) {
+      fscanf(metaout, "%zu", &graph->chunkofst[i][j]);
+      if (j > 0 && graph->chunkofst[i][j-1] >= graph->chunkofst[i][j]) {
+        fprintf(stderr, "error! chunkofst regression.\n");
+        abort();
+      }
+    }
+  }
+
+  graph->ondisk = OFFLOADING;
+
+  fclose(metaout);
+}
+
 static void S_ser_read_from_disk(
     ctrl_type * const ctrl,
     graph_type * const graph) {
 
   if (graph->ondisk == RESIDENT) return;
 
-  vtx_type *nvtxs, *nedges, ncon;
+  vtx_type *nvtxs, ncon;
+  adj_type *nedges;
   tid_type nthreads = ctrl->nthreads;
   char infile[1024];
   FILE *fpin;
 
   sprintf(infile, "dump_mtmetis.%d", graph->gID);
-
   if ((fpin = fopen(infile, "rb")) == NULL)
     return;
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
+  ncon   = graph->ncon;     // now supports multiple constraints!
 
   if (graph->free_xadj) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -143,6 +244,17 @@ static void S_ser_read_from_disk(
       if (fread(graph->adjncy[myid], sizeof(vtx_type), nedges[myid], fpin) != (size_t)nedges[myid])
         abort();
     }
+  } else {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      mtmetis_vtx_type *ofst = graph->chunkofst[myid];
+      mtmetis_adj_type *xadj = graph->xadj[myid];
+      size_t adjncy_chunksize = xadj[ofst[1]];
+      for (int i = 1; i < graph->chunkcnt[myid]; ++i) {
+        dl_storemax(adjncy_chunksize, xadj[ofst[i+1]] - xadj[ofst[i]]);
+      }
+      graph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
+      graph->free_adjncy = 1;   // these arrays will be freed later by `par_graph_free()`
+    }
   }
   if (graph->free_adjwgt) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -150,19 +262,32 @@ static void S_ser_read_from_disk(
       if (fread(graph->adjwgt[myid], sizeof(wgt_type), nedges[myid], fpin) != (size_t)nedges[myid])
         abort();
     }
+  } else {
+    for (int myid = 0; myid < nthreads; ++myid) {
+      mtmetis_vtx_type *ofst = graph->chunkofst[myid];
+      mtmetis_adj_type *xadj = graph->xadj[myid];
+      size_t adjncy_chunksize = xadj[ofst[1]];
+      for (int i = 1; i < graph->chunkcnt[myid]; ++i) {
+        dl_storemax(adjncy_chunksize, xadj[ofst[i+1]] - xadj[ofst[i]]);
+      }
+      graph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
+      graph->free_adjwgt = 1;
+    }
   }
 
   fclose(fpin);
+
+  // delete the checkpoint files
   printf("ondisk: deleting %s\n", infile);
   // gk_rmpath(infile);
-  async_rmpath(infile);   // save a few hundred milliseconds
+  async_rmpath(infile);   // save a few hundred milliseconds by running in background
 
   graph->gID    = 0;
 
   return;
 
 ERROR:
-  printf("Failed to restore graph %s from the disk\n", infile);
+  dl_error("Failed to restore graph %s from the disk\n", infile);
   fclose(fpin);
   gk_rmpath(infile);
   // graph->ondisk = 0;
@@ -212,8 +337,7 @@ void async_dump_to_disk(ctrl_type *ctrl, graph_type *graph) {
   // create thread to run `launch_dump()`
   int ret = pthread_create(&pid, NULL, &launch_dump, (void *)t);
   if (ret) {
-    fprintf(stderr, "pthread_create for async dump to disk failed.\n");
-    exit(1);
+    dl_error("pthread_create for async dump to disk failed.\n");
   }
 
   graph->io_pid = pid;
@@ -234,16 +358,17 @@ void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   // now that the graph had been written onto the disk,
   // wait for the write to complete
   if (graph->ondisk == OFFLOADING) {
-    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t);
     graph->ondisk = LOADING;
+
+    free(pre_t);
   }
 
   pthread_t pid;
   asyncio_task *t = get_async_task(ctrl, graph);
   int ret = pthread_create(&pid, NULL, &launch_read, (void *)t);
   if (ret) {
-    fprintf(stderr, "pthread_create for async read from disk failed.\n");
-    exit(1);
+    dl_error("pthread_create for async read from disk failed.\n");
   }
 
   graph->io_pid = pid;
@@ -259,9 +384,11 @@ void await_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
 
   // the state machine:
   if (graph->ondisk == LOADING) {
-    pthread_join(graph->io_pid, &pre_t); // free(pre_t);
+    pthread_join(graph->io_pid, (void *)&pre_t);
     graph->io_pid = 0;
     graph->ondisk = RESIDENT;
+
+    free(pre_t);
   }
 }
 
@@ -280,10 +407,9 @@ void async_cmd(char *line) {
 
   pthread_t pid;
 
-  int ret = pthread_create(&pid, NULL, &launch_cmd, (void *)new_str);
+  int ret = pthread_create(&pid, NULL, (void *)&launch_cmd, (void *)new_str);
   if (ret) {
-    fprintf(stderr, "pthread_create for async command failed. requested cmd: \"%s\"\n", new_str);
-    exit(1);
+    dl_error("pthread_create for async command failed. requested cmd: \"%s\"\n", new_str);
   }
 
   // make the thread self-destruct after the job is done

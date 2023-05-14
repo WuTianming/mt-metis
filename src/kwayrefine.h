@@ -29,7 +29,8 @@
 ******************************************************************************/
 
 
-#define par_kwawyrefine MTMETIS_par_kwayrefine
+#define par_kwayrefine MTMETIS_par_kwayrefine
+#define par_kwayrefine_chunk MTMETIS_par_kwayrefine_chunk
 /**
 * @brief Parallel kway-refinement.
 *
@@ -40,6 +41,11 @@
 * @return Total of moved vertices.
 */
 vtx_type par_kwayrefine(
+    ctrl_type * const ctrl, 
+    graph_type * const graph,
+    kwinfo_type * kwinfo);
+
+vtx_type par_kwayrefine_chunk(
     ctrl_type * const ctrl, 
     graph_type * const graph,
     kwinfo_type * kwinfo);

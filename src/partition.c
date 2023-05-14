@@ -186,7 +186,12 @@ static void test_func(
     ctrl_type * const ctrl,
     graph_type * const graph) {
   int myid = dlthread_get_id(ctrl->comm);
-  printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", (int)(graph_size(graph) >> 20), graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
+  // printf("reached test function; graph size: %dMB, at %p; nvts %d/%d\n", (int)(graph_size(graph) >> 20), graph, (int)graph->mynvtxs[myid], (int)graph->nvtxs);
+  int maxchunkcnt = 0;
+  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
+    dl_storemax(maxchunkcnt, graph->chunkcnt[i]);
+  }
+  printf("testf[%03d]: %6dMB, %d, %d, %lld\n", maxchunkcnt, (int)(graph_size(graph) >> 20), (int)graph->mynvtxs[myid], (int)graph->nvtxs, (long long)graph->nedges);
 }
 
 static wgt_type S_par_partition_mlevel(
@@ -220,6 +225,12 @@ static wgt_type S_par_partition_mlevel(
         "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
         " exposed edge weight.\n",graph->level,graph->nvtxs, \
         graph->nedges,graph->tadjwgt);
+    fprintf(stderr,"Coarsest graph{%zu} " \
+        "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
+        " exposed edge weight.\n",graph->level,graph->nvtxs, \
+        graph->nedges,graph->tadjwgt);
+    
+    dlthread_barrier(graph->comm);
 
     switch (ctrl->ptype) {
       case MTMETIS_PTYPE_ND:
@@ -235,7 +246,8 @@ static wgt_type S_par_partition_mlevel(
         dl_error("Unknown partition type '%d'\n",ctrl->ptype);
     }
 
-    par_refine_graph(ctrl,cgraph);
+    // par_refine_graph(ctrl,cgraph);
+    par_refine_chunk_graph(ctrl,cgraph);
   } else {
     if (ctrl->ondisk) {
       if (dlthread_get_id(ctrl->comm) == 0)
@@ -261,6 +273,7 @@ static wgt_type S_par_partition_mlevel(
     dlthread_barrier(ctrl->comm);
     if (dlthread_get_id(ctrl->comm) == 0)
       test_func(ctrl, graph);     // TODO clean up
+    dlthread_barrier(ctrl->comm);
   }
 
   /* uncoarsen this level */
@@ -303,6 +316,8 @@ static wgt_type S_par_partition_mlevel_rb(
     pid_type ** const gwhere,
     real_type const ratio) 
 {
+  dl_error("Not implemented!\n");
+#if 0
   vtx_type v, g, mynvtxs, lvtx;
   tid_type hmyid, lid;
   dlthread_comm_t lcomm;
@@ -427,6 +442,7 @@ static wgt_type S_par_partition_mlevel_rb(
   dlthread_barrier(ctrl->comm);
 
   return graph->mincut;
+#endif
 }
 
 
@@ -445,6 +461,7 @@ static wgt_type S_par_partition(
     graph_type * const graph,
     pid_type * const * const where)
 {
+  int ncon = graph->ncon;
   size_t run;
   vtx_type i;
   wgt_type curobj, bestobj;
@@ -458,6 +475,8 @@ static wgt_type S_par_partition(
   pwgts = NULL;
 
   if (ctrl->removeislands) {
+    dl_error("removeislands not implemented with ncon >= 1!\n");
+#if 0
     if (myid == 0) {
       dl_start_timer(&ctrl->timers.preprocess);
     }
@@ -469,6 +488,7 @@ static wgt_type S_par_partition(
     if (myid == 0) {
       dl_stop_timer(&ctrl->timers.preprocess);
     }
+#endif
   }
 
   if (myid == 0) {
@@ -503,9 +523,11 @@ static wgt_type S_par_partition(
       }
 
       /* compute pwgts */
-      graph->pwgts = wgt_init_alloc(0,ctrl->nparts);
+      graph->pwgts = wgt_init_alloc(0,ctrl->nparts * ncon);
       for (i=0;i<graph->mynvtxs[0];++i) {
-        graph->pwgts[graph->where[0][i]] += graph->vwgt[0][i]; 
+        for (int j=0; j<ncon; ++j)
+          graph->pwgts[graph->where[0][i] * ncon + j] += graph->vwgt[0][i*ncon+j];
+        // graph->pwgts[graph->where[0][i]] += graph->vwgt[0][i]; 
       }
     } else {
       switch (ctrl->ptype) {
@@ -517,12 +539,14 @@ static wgt_type S_par_partition(
           curobj = S_par_partition_mlevel_rb(ctrl,graph,gwhere,1.0);
 
           /* compute pwgts */
-          lpwgts = wgt_init_alloc(0,ctrl->nparts);
+          lpwgts = wgt_init_alloc(0,ctrl->nparts * ncon);
           for (i=0;i<graph->mynvtxs[myid];++i) {
-            lpwgts[gwhere[myid][i]] += graph->vwgt[myid][i]; 
+            for (int j=0; j<ncon; ++j)
+              lpwgts[gwhere[myid][i] * ncon + j] += graph->vwgt[myid][i*ncon+j];
+            // lpwgts[gwhere[myid][i]] += graph->vwgt[myid][i]; 
           }
 
-          wgt_dlthread_sumareduce(lpwgts,ctrl->nparts,ctrl->comm);
+          wgt_dlthread_sumareduce(lpwgts,ctrl->nparts * ncon,ctrl->comm);
 
           /* assign where */
           if (myid == 0) {
@@ -618,6 +642,7 @@ void partition_print_info(
   const wgt_type *vwgt; 
   const pid_type *mywhere;
 
+  int ncon = graph->ncon;
   nparts = ctrl->nparts;
   tpwgts = ctrl->tpwgts;
 
@@ -644,61 +669,69 @@ void partition_print_info(
     }
 
     /* Compute objective-related infomration */
-    printf(" - Edgecut: %"PF_WGT_T", communication volume: %"PF_VTX_T".\n\n", \
-      S_ser_calc_cut(graph,where),S_ser_calc_comvol(graph,where, \
-        nparts));
+    printf(" - Edgecut and communication volume calculation (TODO:) \n\n");
+    // printf(" - Edgecut: %"PF_WGT_T", communication volume: %"PF_VTX_T".\n\n", \
+    //   S_ser_calc_cut(graph,where),S_ser_calc_comvol(graph,where,nparts));
 
 
     /* Compute constraint-related information */
-    kpwgts = wgt_init_alloc(0,nparts);
+    kpwgts = wgt_init_alloc(0,nparts * ncon);
 
     for (myid=0;myid<graph->dist.nthreads;++myid) {
       mynvtxs = graph->mynvtxs[myid];
       vwgt = graph->vwgt[myid];
       mywhere = where[myid];
       for (i=0; i<mynvtxs; ++i) {
-        kpwgts[mywhere[i]] += vwgt[i];
+        for (int j = 0; j < ncon; j++)
+          kpwgts[mywhere[i] * ncon + j] += vwgt[i * ncon + j];
+        // kpwgts[mywhere[i]] += vwgt[i];
       }
     }
 
     /* Report on balance */
     printf(" - Balance:\n");
-    tvwgt = wgt_sum(kpwgts,nparts);
-    q = 0;
-    unbalance = 1.0*kpwgts[q]/(tpwgts[q]*tvwgt);
-    for (p=1;p<nparts;++p) {
-      if (unbalance < 1.0*kpwgts[p]/(tpwgts[p]*tvwgt)) {
-        unbalance = 1.0*kpwgts[p]/(tpwgts[p]*tvwgt);
-        k = i;
+    for (int j=0; j<ncon; j++) {
+      tvwgt = wgt_sum_step(kpwgts+j, nparts*ncon, ncon);
+      printf("constraint %d, tvwgt = %ld\n", j, tvwgt);
+      for (int i = 0; i < nparts; i++) {
+        printf("  part %d, kpwgts = %ld, tpwgts = %lf\n", i, kpwgts[i*ncon+j], tpwgts[i]);
       }
-    }
-    mvwgt = 0;
-    for (myid=0;myid<graph->dist.nthreads;++myid) {
-      if ((mynvtxs = graph->mynvtxs[myid]) > 0) {
-        vwgt = graph->vwgt[myid];
-        k = wgt_max_index(vwgt,mynvtxs);
-        if (vwgt[k] > mvwgt) {
-          mvwgt = vwgt[k];
+      for (k=0, unbalance=1.0*kpwgts[k*ncon+j]/(tpwgts[k]*tvwgt), i=1; i<nparts; i++) {
+        if (unbalance < 1.0*kpwgts[i*ncon+j]/(tpwgts[i]*tvwgt)) {
+          unbalance = 1.0*kpwgts[i*ncon+j]/(tpwgts[i]*tvwgt);
+          k = i;
         }
       }
-    }
-
-    printf("     constraint #0:  %5.3lf out of %5.3lf\n", \
-        unbalance, 1.0*nparts*mvwgt/ (1.0*tvwgt));
-    printf("\n");
-    p=0; 
-    unbalance=kpwgts[p]/(tpwgts[p]*tvwgt);
-    for (q=1;q<nparts;++q) {
-      if (unbalance < kpwgts[q]/(tpwgts[q]*tvwgt)) {
-        unbalance = kpwgts[q]/(tpwgts[q]*tvwgt);
-        p = q;
+      mvwgt = 0;
+      for (myid=0;myid<graph->dist.nthreads;++myid) {
+        if ((mynvtxs = graph->mynvtxs[myid]) > 0) {
+          vwgt = graph->vwgt[myid];
+          // k = wgt_max_index(vwgt,mynvtxs);
+          for (int k = 0; k < mynvtxs; k++)
+            if (vwgt[k*ncon + j] > mvwgt)
+              mvwgt = vwgt[k*ncon + j];
+        }
       }
+      printf("     constraint #%d:  %5.3lf out of %5.3lf\n", j, \
+          unbalance, 1.0*nparts*mvwgt/ (1.0*tvwgt));
     }
-
-    printf(" - Most overweight partition:\n");
-    printf("     pid: %"PF_PID_T", actual: %"PF_WGT_T", desired: %"PF_WGT_T \
-           ", ratio: %.2lf\n",p,kpwgts[p],(wgt_type)(tvwgt*tpwgts[p]),unbalance);
     printf("\n");
+
+    if (ncon == 1) {
+      p=0; 
+      unbalance=kpwgts[p]/(tpwgts[p]*tvwgt);
+      for (q=1;q<nparts;++q) {
+        if (unbalance < kpwgts[q]/(tpwgts[q]*tvwgt)) {
+          unbalance = kpwgts[q]/(tpwgts[q]*tvwgt);
+          p = q;
+        }
+      }
+
+      printf(" - Most overweight partition:\n");
+      printf("     pid: %"PF_PID_T", actual: %"PF_WGT_T", desired: %"PF_WGT_T \
+            ", ratio: %.2lf\n",p,kpwgts[p],(wgt_type)(tvwgt*tpwgts[p]),unbalance);
+      printf("\n");
+    }
 
   } else if (ctrl->ptype == MTMETIS_PTYPE_VSEP) {
     dl_print_header("Vertex Separator",'-');
@@ -755,16 +788,21 @@ void par_partition_kway(
 {
   pid_type i;
   wgt_type cut;
+  int ncon = graph->ncon;
 
   tid_type const myid = dlthread_get_id(ctrl->comm);
 
   /* set up multipliers for making balance computations easier */
   if (myid == 0) {
     if (!ctrl->pijbm) {
-      ctrl->pijbm = real_alloc(ctrl->nparts);
+      ctrl->pijbm = real_alloc(ctrl->nparts * graph->ncon);
     }
     for (i=0;i<ctrl->nparts;++i) {
-      ctrl->pijbm[i] = graph->invtvwgt / ctrl->tpwgts[i];
+      for (int j = 0; j < ncon; ++j) {
+        ctrl->pijbm[i * ncon + j] = graph->invtvwgt[j] / ctrl->tpwgts[i];
+        // pijbm is equal to: 1 / (tpwgts[i] * tvwgt[j])
+        // "The inverted average partition weight"
+      }
     }
   }
   dlthread_barrier(ctrl->comm);
@@ -786,16 +824,19 @@ void par_partition_rb(
 {
   pid_type i;
   wgt_type cut;
+  int ncon = graph->ncon;
 
   tid_type const myid = dlthread_get_id(ctrl->comm);
 
   /* set up multipliers for making balance computations easier */
   if (myid == 0) {
     if (!ctrl->pijbm) {
-      ctrl->pijbm = real_alloc(ctrl->nparts);
+      ctrl->pijbm = real_alloc(ctrl->nparts * graph->ncon);
     }
     for (i=0;i<ctrl->nparts;++i) {
-      ctrl->pijbm[i] = graph->invtvwgt / ctrl->tpwgts[i];
+      for (int t = 0; t < ncon; ++t) {
+        ctrl->pijbm[i * ncon + t] = graph->invtvwgt[t] / ctrl->tpwgts[i];
+      }
     }
   }
   dlthread_barrier(ctrl->comm);
@@ -824,7 +865,7 @@ void par_partition_vertexseparator(
       ctrl->pijbm = real_alloc(ctrl->nparts);
     }
     for (i=0;i<ctrl->nparts;++i) {
-      ctrl->pijbm[i] = graph->invtvwgt / ctrl->tpwgts[i];
+      ctrl->pijbm[i] = graph->invtvwgt[0] / ctrl->tpwgts[i];
     }
   }
   dlthread_barrier(ctrl->comm);
@@ -849,7 +890,7 @@ void par_partition_edgeseparator(
       ctrl->pijbm = real_alloc(MTMETIS_ESEP_NPARTS);
     }
     for (i=0;i<MTMETIS_ESEP_NPARTS;++i) {
-      ctrl->pijbm[i] = graph->invtvwgt / ctrl->tpwgts[i];
+      ctrl->pijbm[i] = graph->invtvwgt[0] / ctrl->tpwgts[i];
     }
   }
   dlthread_barrier(ctrl->comm);

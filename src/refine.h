@@ -28,6 +28,7 @@
 
 
 #define par_refine_graph MTMETIS_par_refine_graph
+#define par_refine_chunk_graph MTMETIS_par_refine_chunk_graph
 /**
  * @brief Refine the partition of a graph.
  *
@@ -37,6 +38,10 @@
  * @return The number of vertices moved while refining the partition.
  */
 vtx_type par_refine_graph(
+    ctrl_type * ctrl,
+    graph_type * graph);
+
+vtx_type par_refine_chunk_graph(
     ctrl_type * ctrl,
     graph_type * graph);
 

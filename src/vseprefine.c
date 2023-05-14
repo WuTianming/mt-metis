@@ -2471,9 +2471,13 @@ vtx_type par_vseprefine(
     graph_type * const graph,
     vsinfo_type * const vsinfo)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for vsep\n");
+  }
+
   vtx_type nmoves;
 
-  wgt_type const avgvtxwgt = graph->tvwgt/graph->nvtxs;
+  wgt_type const avgvtxwgt = graph->tvwgt[0]/graph->nvtxs;
   wgt_type * const pwgts = graph->pwgts;
 
   wgt_type const maxpwgt = ctrl->ubfactor*(pwgts[0]+pwgts[1])*0.5;

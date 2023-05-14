@@ -14,7 +14,7 @@
 
 
 
-#include "contract_chunk.h"
+#include "contract.h"
 #include "check.h"
 
 
@@ -145,6 +145,10 @@ static void S_par_contract_DENSE(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  if (graph->ncon > 1) {
+    dl_error("Dense contraction only works for 1-constrained graphs for now\n");
+  }
+
   adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -328,6 +332,8 @@ static void S_par_contract_CLS_quadratic(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
+
   adj_type cnedges, l, maxdeg, j, i, jj, start;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -344,9 +350,9 @@ static void S_par_contract_CLS_quadratic(
   size_t   const * const gchunkcnt = graph->chunkcnt;
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const * const *)graph->adjncy;   // TODO
   wgt_type const * const * const gvwgt = (wgt_type const * const *)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const * const *)graph->adjwgt;   // TODO
+  vtx_type * const * const gadjncy = (vtx_type * const *)graph->adjncy;
+  wgt_type * const * const gadjwgt = (wgt_type * const *)graph->adjwgt;
 
   vtx_type const * const * const gcmap = (vtx_type const **)graph->cmap;
 
@@ -388,7 +394,7 @@ static void S_par_contract_CLS_quadratic(
     dl_start_timer(&(ctrl->timers.contraction));
   }
 
-  cgraph = par_graph_setup_coarse(graph,mycnvtxs);    // TODO 可能有遗漏的没有初始化的东西
+  cgraph = par_graph_setup_coarse(graph,mycnvtxs);
 
   cdist = cgraph->dist;
 
@@ -397,8 +403,13 @@ static void S_par_contract_CLS_quadratic(
   adj_type * const mycxadj = cgraph->xadj[myid];
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
 
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(ctrl->adjchunksize*1.1);
-  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(ctrl->adjchunksize*1.1);
+  size_t adjncy_chunksize = /* take min */
+      ctrl->adjchunksize > gxadj[myid][gchunkofst[myid][1]] * 2
+          ? gxadj[myid][gchunkofst[myid][1]] * 2
+          : ctrl->adjchunksize;
+
+  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
+  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
   size_t   * cchunkcnt = cgraph->chunkcnt; cchunkcnt[myid] = 1;
   size_t   * pchunkcnt = cchunkcnt + myid;
@@ -445,8 +456,8 @@ static void S_par_contract_CLS_quadratic(
    *   barrier();
   */
 
-  vtx_type * const local_adjncy = vtx_alloc(ctrl->adjchunksize*1.1);
-  wgt_type * const local_adjwgt = wgt_alloc(ctrl->adjchunksize*1.1);
+  vtx_type * const local_adjncy = vtx_alloc(adjncy_chunksize);
+  wgt_type * const local_adjwgt = wgt_alloc(adjncy_chunksize);
 
   // vtx_type ** dlocal_adjncy = dlthread_get_shmem(sizeof(vtx_type*)*nthreads, graph->comm);
 
@@ -455,28 +466,35 @@ static void S_par_contract_CLS_quadratic(
 
   for (int cc1=0; cc1<maxchunkcnt; ++cc1) {
     dlthread_barrier(graph->comm);    // barrier every time before file read
+
+    /* if I don't have more chunks to process, make sure to mirror the barrier
+     * calls as other threads do. Otherwise the lockstep might break and mess up
+     * the rest of the program */
     if (cc1 >= gchunkcnt[myid]) {
       for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
         dlthread_barrier(graph->comm);    // barrier every time before file read
+        dlthread_barrier(graph->comm);    // after file read, too
       }
       continue;
     }
+
     vtx_type cc1start = gchunkofst[myid][cc1], cc1end = gchunkofst[myid][cc1+1];
     adj_type cc1adjstart = gxadj[myid][cc1start], cc1adjend = gxadj[myid][cc1end];
     fseek(dadjncy_read, sizeof(vtx_type) * cc1adjstart, SEEK_SET);
     fseek(dadjwgt_read, sizeof(wgt_type) * cc1adjstart, SEEK_SET);
-    fread(local_adjncy, sizeof(vtx_type), cc1adjend - cc1adjstart, dadjncy_read);
+    fread(local_adjncy, sizeof(vtx_type), cc1adjend - cc1adjstart, dadjncy_read);   // 读的是实际长度
     fread(local_adjwgt, sizeof(wgt_type), cc1adjend - cc1adjstart, dadjwgt_read);
 
-      {
+// #define PRINT_LOOP_VAR
+#ifdef PRINT_LOOP_VAR
         fprintf(stderr, "#%"PF_TID_T": this chunk is [%"PF_VTX_T", %"PF_VTX_T")\n", myid, cc1start, cc1end);
-      }
+#endif
 
     for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
       dlthread_barrier(graph->comm);    // barrier every time before file read
-      if (myid == 0) {
-        fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2);
-      }
+#ifdef PRINT_LOOP_VAR
+      if (myid == 0) { fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2); }
+#endif
       vtx_type cc2start, cc2end;
       adj_type cc2adjstart, cc2adjend;
       if (cc2 < gchunkcnt[myid]) {
@@ -486,14 +504,22 @@ static void S_par_contract_CLS_quadratic(
         fseek(dadjwgt_read, sizeof(wgt_type) * cc2adjstart, SEEK_SET);
         fread(gadjncy[myid], sizeof(vtx_type), cc2adjend - cc2adjstart, dadjncy_read);
         fread(gadjwgt[myid], sizeof(wgt_type), cc2adjend - cc2adjstart, dadjwgt_read);  // this space is shared
+      } else {
+        /* in this stage, no one should ever try to read chunk #cc2 of this
+         * local thread. */
       }
+
+      dlthread_barrier(ctrl->comm);   // sync all threads to finish the read
 
       // coarse vertices have their info gathered in order
       // start where we left off at coarse idx = c
       for (;c<mycnvtxs;++c) {
         cg = lvtx_to_gvtx(c,myid,cdist);
         /* initialize the coarse vertex */
-        mycvwgt[c] = 0;
+        for (t = 0; t < ncon; ++t) {
+          mycvwgt[c * ncon + t] = 0;
+        }
+        // mycvwgt[c] = 0;
 
         v = fcmap[c];       // this is guaranteed to be thread local!
         if (v >= cc1end) {  // I'm done with the cc1 chunk
@@ -517,6 +543,21 @@ static void S_par_contract_CLS_quadratic(
         DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[t][k],cdist),"%"PF_VTX_T);
 
         DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist), graph->dist),"%"PF_TID_T);
+
+        /* check if the chunk length reaches maximum */
+        size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
+        size_t deg1 = gxadj[o][v+1] - gxadj[o][v],
+               deg2 = gxadj[t][k+1] - gxadj[t][k];
+        if (chunkadjs + deg1 + deg2 >= ctrl->adjchunksize) {
+#ifdef PRINT_LOOP_VAR
+          fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunkadjs, fout1);
+#endif
+          mycchunkofst[*pchunkcnt] = c;
+          ++*pchunkcnt;
+          fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
+          fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
+        }
+
         start = cnedges;
 
         vtx_type * pcadjncy = mycadjncy - mycxadj[mycchunkofst[*pchunkcnt-1]];
@@ -530,7 +571,11 @@ static void S_par_contract_CLS_quadratic(
           wgt_type const * const padjwgt = (ttt==1 ? local_adjwgt - cc1adjstart : gadjwgt[o] - gxadj[o][gchunkofst[o][cc2]]);
 
           /* transfer over vertex stuff from v and u */
-          mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+          // mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+          for (t = 0; t < ncon; ++t) {
+            mycvwgt[c * ncon + t] += gvwgt[o][v * ncon + t];
+          }
+          // FIXME: ncon
 
           // (o,v) -j-> (t,k)
           // explore other coarse vertices that current coarse vertex is connected to
@@ -552,11 +597,12 @@ static void S_par_contract_CLS_quadratic(
               /* external edge */
               l = k&MASK;
               i = htable[l];
-              // ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];    // TODO access
               ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
               if (i == NULL_OFFSET) {
                 /* new edge */
-                // TODO write and allocate
+                // TODO because this is filled sequentially, we can just call
+                // fwrite without manually buffering with `mycadjncy`
+                // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 adjwgt_sum += ewgt;
@@ -567,14 +613,17 @@ static void S_par_contract_CLS_quadratic(
                 /* search for existing edge */
                 for (jj=i;jj<cnedges;++jj) {
                   if (pcadjncy[jj] == k) {
-                    // mycadjwgt[jj] += ewgt;
                     pcadjwgt[jj] += ewgt;
+                    if (pcadjwgt[jj] == 0) {
+                      fprintf(stderr, "error!\n");
+                    }
                     adjwgt_sum += ewgt;
                     break;
                   }
                 }
                 if (jj == cnedges) {
                   /* we didn't find the edge, so add it */
+                  // TODO call fwrite directly
                   pcadjncy[cnedges] = k;
                   pcadjwgt[cnedges] = ewgt;
                   adjwgt_sum += ewgt;
@@ -601,24 +650,17 @@ static void S_par_contract_CLS_quadratic(
 
         mycxadj[c+1] = cnedges;
 
-        /* check if the chunk length reaches maximum */
-        size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
-        if (chunkadjs > ctrl->adjchunksize) {
-          fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunkadjs, fout1);
-          mycchunkofst[*pchunkcnt] = c+1;
-          ++*pchunkcnt;
-          fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
-          fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
-        }
+      } // end current coarse node c
+    } // end cc2
+  } // end cc1
 
-      }
-    }
-  }
   DL_ASSERT_EQUALS(c, mycnvtxs, "%"PF_VTX_T);
 
   size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt - 1]];
   if (chunkadjs > 0) {
-    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunkadjs, fout1);
+#ifdef PRINT_LOOP_VAR
+    // fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunkadjs, fout1);
+#endif
     mycchunkofst[*pchunkcnt] = mycnvtxs;
     fwrite(mycadjncy, sizeof(adj_type), chunkadjs, cadjncy_dump);
     fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
@@ -626,8 +668,11 @@ static void S_par_contract_CLS_quadratic(
     --*pchunkcnt;
   }
 
-  fclose(cadjncy_dump);
-  fclose(cadjwgt_dump);
+  fclose(cadjncy_dump); fclose(cadjwgt_dump);
+  fclose(dadjncy_read); fclose(dadjwgt_read);
+
+  dl_free(local_adjncy);
+  dl_free(local_adjwgt);
   dl_free(htable);
 
   cgraph->mynedges[myid] = cnedges;
@@ -647,15 +692,15 @@ static void S_par_contract_CLS_quadratic(
 
   if (myid == 0) {
     for (int i = 0; i < nthreads; ++i) {
-      printf("thread %d: c=%zu; %zu: (", i, cgraph->chunkcnt[i], cgraph->mynvtxs[i]);
+      printf("thread %d: c#=%2zu; [%7zu|%9zu]: (", i, cgraph->chunkcnt[i], cgraph->mynvtxs[i], cgraph->mynedges[i]);
       for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
         printf("%" PF_VTX_T ",", cgraph->chunkofst[i][c + 1] - cgraph->chunkofst[i][c]);
       }
-      printf(")\n  edge count: (");
-      for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
-        printf("%" PF_ADJ_T ",",
-              cgraph->xadj[i][cgraph->chunkofst[i][c + 1]] - cgraph->xadj[i][cgraph->chunkofst[i][c]]);
-      }
+      // printf(")\n  edge count: (");
+      // for (int c = 0; c < cgraph->chunkcnt[i]; ++c) {
+      //   printf("%" PF_ADJ_T ",",
+      //         cgraph->xadj[i][cgraph->chunkofst[i][c + 1]] - cgraph->xadj[i][cgraph->chunkofst[i][c]]);
+      // }
       printf(")\n");
     }
     fflush(stdout);
@@ -663,6 +708,53 @@ static void S_par_contract_CLS_quadratic(
   dlthread_barrier(ctrl->comm);
 
   // DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
+
+  /* generate a vanilla mt-metis graph structure to check the edge structure
+   * integrity */
+  if (0) {
+    graph_type *g_gather = dlthread_get_shmem(sizeof(graph_type), graph->comm);
+    dlthread_barrier(ctrl->comm);
+
+    if (myid == 0) {
+      *g_gather = *cgraph;    // copy all the pointers
+      g_gather->adjncy = r_vtx_alloc(nthreads);
+      g_gather->adjwgt = r_wgt_alloc(nthreads);
+    }
+    dlthread_barrier(ctrl->comm);
+
+    FILE *adjncy_read = fopen(fout1, "rb");
+    FILE *adjwgt_read = fopen(fout2, "rb");
+    size_t b;
+    fprintf(stderr, "graph %zu, tid %d, size %zu\n", cgraph->level, (int)myid, (size_t)(cnedges));
+
+    g_gather->adjncy[myid] = vtx_alloc(cnedges + 1);
+    g_gather->adjwgt[myid] = wgt_alloc(cnedges + 1);
+
+    b = fread(g_gather->adjncy[myid], sizeof(vtx_type), cnedges, adjncy_read);
+    if (b != cnedges) { dl_error("[tid %d] file length error at line %d\n", (int)myid, __LINE__); }
+    b = fread(g_gather->adjwgt[myid], sizeof(wgt_type), cnedges, adjwgt_read);
+    if (b != cnedges) { dl_error("[tid %d] file length error at line %d\n", (int)myid, __LINE__); }
+    dlthread_barrier(ctrl->comm);
+
+    fclose(adjncy_read);
+    fclose(adjwgt_read);
+
+    int chk = check_graph(g_gather);
+
+    if (chk != 1) {
+      dl_error("Bad graph generated in coarsening\n");
+    }
+    dlthread_barrier(ctrl->comm);
+    dl_free(g_gather->adjncy[myid]);
+    dl_free(g_gather->adjwgt[myid]);
+    dlthread_barrier(ctrl->comm);
+    if (myid == 0) {
+      dl_free(g_gather->adjncy);
+      dl_free(g_gather->adjwgt);
+    }
+    dlthread_barrier(ctrl->comm);
+    dlthread_free_shmem(g_gather, ctrl->comm);
+  }
 }
 
 
@@ -685,12 +777,10 @@ void par_contract_chunk_graph(
       S_par_contract_CLS_quadratic(ctrl,graph,mycnvtxs,gmatch,fcmap);
       break;
     case MTMETIS_CONTYPE_DENSE:
-      exit(1);
-      // S_par_contract_DENSE(ctrl,graph,mycnvtxs,gmatch,fcmap);
+      dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
       break;
     case MTMETIS_CONTYPE_SORT:
-      exit(1);
-      // S_par_contract_SORT(ctrl,graph,mycnvtxs,gmatch,fcmap);
+      dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
       break;
     default:
       dl_error("Unknown contraction type '%d'\n",ctrl->contype);

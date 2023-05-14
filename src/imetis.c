@@ -29,6 +29,7 @@
 
 static void S_create_arrays(
     vtx_type const nvtxs,
+    int const ncon,
     adj_type const * const xadj,
     vtx_type const * const adjncy,
     wgt_type const * const vwgt,
@@ -67,8 +68,8 @@ static void S_create_arrays(
    * see if we're using floats */
   if (sizeof(**r_vwgt) != sizeof(*vwgt) ||
       (idx_t)0.5 != (wgt_type)0.5) {
-    *r_vwgt = malloc(sizeof(**r_vwgt)*nvtxs);
-    for (i=0;i<nvtxs;++i) {
+    *r_vwgt = malloc(sizeof(**r_vwgt)*nvtxs*ncon);
+    for (i=0;i<nvtxs*ncon;++i) {
       (*r_vwgt)[i] = (idx_t)vwgt[i];
     }
   } else {
@@ -150,6 +151,7 @@ wgt_type metis_initcut(
     size_t const ncuts,
     int const rb,
     vtx_type const nvtxs,
+    int const ncon,
     adj_type * const xadj,
     vtx_type * const adjncy,
     wgt_type * const vwgt,
@@ -159,7 +161,7 @@ wgt_type metis_initcut(
   pid_type p;
   idx_t m_nvtxs, m_nparts, cut, m_ncon, status;
   idx_t options[METIS_NOPTIONS];
-  real_t ubf;
+  real_t * ubf;
   real_t * m_tpwgts;
   idx_t * m_xadj, * m_adjncy, * m_vwgt, * m_adjwgt, * m_where;
 
@@ -167,7 +169,7 @@ wgt_type metis_initcut(
 
   __METIS_SetDefaultOptions(options);
 
-  m_ncon = 1;
+  m_ncon = ncon;
 
   options[METIS_OPTION_NITER] = 10;
   options[METIS_OPTION_OBJTYPE] = METIS_OBJTYPE_CUT;
@@ -182,31 +184,28 @@ wgt_type metis_initcut(
 
   m_nparts = (idx_t)nparts;
   m_nvtxs = (idx_t)nvtxs;
-  ubf = pow(ctrl->ubfactor,1.0/log(nparts));
+  ubf = real_init_alloc(1.0, ncon);
+  for (p=0;p<ncon;++p) {
+    ubf[p] = pow(ctrl->ubfactor,1.0/log(nparts));
+  }
 
-  S_create_arrays(nvtxs,xadj,adjncy,vwgt,adjwgt,where,&m_xadj,&m_adjncy, \
+  S_create_arrays(nvtxs,ncon,xadj,adjncy,vwgt,adjwgt,where,&m_xadj,&m_adjncy, \
       &m_vwgt,&m_adjwgt,&m_where);
 
-  /* see if we need to re-allocate tpwgts to metis size */
-  if (sizeof(real_type) != sizeof(real_t)) {
-    m_tpwgts = malloc(sizeof(*m_tpwgts)*nparts);
-    for (p=0;p<nparts;++p) {
-      m_tpwgts[p] = tpwgts[p];
-    }
-  } else {
-    m_tpwgts = (real_t*)tpwgts;
-  }
+  // for simplicity, make METIS assume that the graph should be divided evenly
+  // Caveat: FIXME: this will ignore the ubf parameter, leading to wrong balancing!
+  m_tpwgts = NULL;
 
   status = METIS_OK;
   if (rb || nparts == 2) {
     options[METIS_OPTION_RTYPE] = METIS_RTYPE_FM;
     status = __METIS_PartGraphRecursive(&m_nvtxs,&m_ncon,m_xadj, \
         m_adjncy,m_vwgt,NULL,m_adjwgt,&m_nparts,m_tpwgts, \
-        &ubf,options,&cut,m_where);
+        ubf,options,&cut,m_where);
   } else {
     status = __METIS_PartGraphKway(&m_nvtxs,&m_ncon,m_xadj, \
         m_adjncy,m_vwgt,NULL,m_adjwgt,&m_nparts,m_tpwgts, \
-        &ubf,options,&cut,m_where);
+        ubf,options,&cut,m_where);
   }
 
   /* discard allocated memory */
@@ -253,7 +252,7 @@ wgt_type metis_initsep(
 
   m_nvtxs = nvtxs;
 
-  S_create_arrays(nvtxs,xadj,adjncy,vwgt,NULL,where,&m_xadj,&m_adjncy, \
+  S_create_arrays(nvtxs,1,xadj,adjncy,vwgt,NULL,where,&m_xadj,&m_adjncy, \
       &m_vwgt,NULL,&m_where);
 
   __METIS_ComputeVertexSeparator(&m_nvtxs,m_xadj,m_adjncy, \
@@ -296,7 +295,7 @@ wgt_type metis_kway(
   m_nparts = ctrl->nparts;
   ubf = ctrl->ubfactor;
 
-  S_create_arrays(graph->mynvtxs[0],graph->xadj[0],graph->adjncy[0], \
+  S_create_arrays(graph->mynvtxs[0],graph->ncon,graph->xadj[0],graph->adjncy[0], \
       graph->vwgt[0],graph->adjwgt[0],where[0],&m_xadj,&m_adjncy, \
       &m_vwgt,&m_adjwgt,&m_where);
 
@@ -365,7 +364,7 @@ wgt_type metis_esep(
   graph->where = r_pid_alloc(1);
   graph->where[0] = pid_alloc(graph->mynvtxs[0]);
 
-  S_create_arrays(graph->mynvtxs[0],graph->xadj[0],graph->adjncy[0], \
+  S_create_arrays(graph->mynvtxs[0],1,graph->xadj[0],graph->adjncy[0], \
       graph->vwgt[0],graph->adjwgt[0],where[0],&m_xadj,&m_adjncy, \
       &m_vwgt,&m_adjwgt,&m_where);
 
@@ -430,7 +429,7 @@ wgt_type metis_vsep(
 
   m_nvtxs = graph->mynvtxs[0];
 
-  S_create_arrays(graph->mynvtxs[0],graph->xadj[0],graph->adjncy[0], \
+  S_create_arrays(graph->mynvtxs[0],1,graph->xadj[0],graph->adjncy[0], \
       graph->vwgt[0],NULL,where[0],&m_xadj,&m_adjncy, \
       &m_vwgt,NULL,&m_where);
 
@@ -487,7 +486,7 @@ void metis_nd(
   options[METIS_OPTION_NSEPS] = ctrl->ncuts;
   options[METIS_OPTION_UFACTOR] = 1000*(ctrl->ubfactor - 1.0);
 
-  S_create_arrays(graph->mynvtxs[0],graph->xadj[0],graph->adjncy[0], \
+  S_create_arrays(graph->mynvtxs[0],1,graph->xadj[0],graph->adjncy[0], \
       graph->vwgt[0],NULL,perm[0],&m_xadj,&m_adjncy, \
       &m_vwgt,NULL,&m_perm);
 

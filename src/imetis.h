@@ -35,6 +35,7 @@
  * @param ncuts The number of partitionings to make.
  * @param rb Use recursive bisection to generate k-way partitionings.
  * @param nvtxs The number of vertices in the graph.
+ * @param ncon The number of weights per vertex.
  * @param xadj The adjacency list pointer.
  * @param adjncy The adjacency list.
  * @param vwgt The vertex weights.
@@ -50,6 +51,7 @@ wgt_type metis_initcut(
     size_t const ncuts,
     int const rb,
     vtx_type nvtxs,
+    int ncon,
     adj_type * const xadj,
     vtx_type * const adjncy,
     wgt_type * const vwgt,

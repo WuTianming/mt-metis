@@ -147,6 +147,7 @@ static void S_par_contract_DENSE(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
   adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -204,11 +205,12 @@ static void S_par_contract_DENSE(
   }
 
   adj_type * const mycxadj = cgraph->xadj[myid];
-  // over-allocating...
-  // TODO: apply the new chunk-based memory model to this function
   vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges_upperlimit);
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges_upperlimit);
+
+  cgraph->free_adjncy = 1;
+  cgraph->free_adjwgt = 1;
 
   table = NULL;
 
@@ -223,7 +225,11 @@ static void S_par_contract_DENSE(
   for (c=0;c<mycnvtxs;++c) {
     cg = lvtx_to_gvtx(c,myid,cdist);
     /* initialize the coarse vertex */
-    mycvwgt[c] = 0;     // the v weight is the sum of original vertices
+    // the v weight is the sum of original vertices
+    for (t=0;t<ncon;++t) {
+      mycvwgt[c*ncon+t] = 0;
+    }
+    // mycvwgt[c] = 0;
 
     v = fcmap[c];
     o = myid;
@@ -233,14 +239,17 @@ static void S_par_contract_DENSE(
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
-      mycvwgt[c] += gvwgt[o][v];
+      for (t=0;t<ncon;++t) {
+        mycvwgt[c*ncon+t] += gvwgt[o][v*ncon+t];
+      }
+      // mycvwgt[c] += gvwgt[o][v];
 
       // this kills locality when accessing the fine graph:
       //   (o, v) = canonical(gmatch[o][v]);
 
       /* for all edges emanating from (v in o): */
       for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
-        k = gadjncy[o][j];    // TODO slice
+        k = gadjncy[o][j];
         if (k < graph->mynvtxs[o]) {
           t = o;
         } else {
@@ -257,15 +266,15 @@ static void S_par_contract_DENSE(
         } else {
           /* external edge */
           i = table[k];
-          ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];  // TODO slice
+          ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];
           if (i == NULL_ADJ) {
             /* new edge */
-            mycadjncy[cnedges] = k;     // TODO slice
-            mycadjwgt[cnedges] = ewgt;  // TODO slice
-            table[k] = cnedges++;       // put a new edge in the dense vector
+            mycadjncy[cnedges] = k;
+            mycadjwgt[cnedges] = ewgt;
+            table[k] = cnedges++;
           } else {
             /* duplicate edge */
-            mycadjwgt[i] += ewgt;       // TODO slice
+            mycadjwgt[i] += ewgt;
           }
         }
       }
@@ -291,10 +300,9 @@ static void S_par_contract_DENSE(
 
   cgraph->mynedges[myid] = cnedges;
 
-  // TODO: why not???
-  // but that's OK anyway, because in the ondisk implementation
-  //   the space will be freed soon.
-  //graph_readjust_memory(cgraph,adjsize);
+  // omitting memory readjustment is OK anyway, because in the ondisk
+  // implementation, the space will be freed soon.
+  // graph_readjust_memory(cgraph,adjsize);
 
   dlthread_barrier(ctrl->comm);
   if (myid == 0) {
@@ -307,8 +315,8 @@ static void S_par_contract_DENSE(
     dl_stop_timer(&(ctrl->timers.contraction));
   }
 
-  // Note: the check.c utilities will be unavailable for quite some time
-  // because they require a total rewrite
+  // check takes a lot of time, but I want to keep the assertions. So I have to
+  // disable this particular check.
   // DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
 }
 
@@ -330,6 +338,7 @@ static void S_par_contract_CLS(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
   adj_type cnedges, l, maxdeg, j, i, jj, start;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -369,14 +378,10 @@ static void S_par_contract_CLS(
     cnedges += l;
   }
 
-/*
-  // oh I have to implement chunks in this too
-  // or just disable this branch
   if (maxdeg > MASK_MAX_DEG) {
     S_par_contract_DENSE(ctrl,graph,mycnvtxs,gmatch,fcmap);
     return;
   }
-*/
 
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.contraction));
@@ -389,7 +394,7 @@ static void S_par_contract_CLS(
   S_adjust_cmap(graph->cmap[myid],mynvtxs,graph->dist,dist);
 
   adj_type * const mycxadj = cgraph->xadj[myid];
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges);   // TODO why do I have to do that again for coarser graph?
+  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges);
   wgt_type * const mycvwgt = cgraph->vwgt[myid];
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges);
 
@@ -404,7 +409,10 @@ static void S_par_contract_CLS(
   for (c=0;c<mycnvtxs;++c) {
     cg = lvtx_to_gvtx(c,myid,dist);
     /* initialize the coarse vertex */
-    mycvwgt[c] = 0;
+    for (t=0;t<ncon;++t) {
+      mycvwgt[c*ncon+t] = 0;
+    }
+    // mycvwgt[c] = 0;
 
     v = fcmap[c];
     o = myid;
@@ -415,7 +423,10 @@ static void S_par_contract_CLS(
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],dist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
-      mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+      for (t=0;t<ncon;++t) {
+        mycvwgt[c*ncon+t] += graph->uniformvwgt ? 1 : gvwgt[o][v*ncon+t];
+      }
+      // mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
 
       for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
         k = gadjncy[o][j];
@@ -515,6 +526,10 @@ static void S_par_contract_SORT(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  if (graph->ncon > 1) {
+    dl_error("SORT contraction only works for 1-constrained graphs for now\n");
+  }
+
   adj_type cnedges, maxdeg, j, l;
   tid_type o, t;
   vtx_type v, c, cg, k, nlst;

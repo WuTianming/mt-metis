@@ -18,8 +18,7 @@
 
 #include "coarsen.h"
 #include "aggregate.h"
-// #include "contract.h"
-#include "contract_chunk.h"
+#include "contract.h"
 #include "check.h"
 
 
@@ -76,15 +75,60 @@ graph_type * par_coarsen_graph(
     }
 
     /* set the maximum allowed coarsest vertex weight */
-    ctrl->maxvwgt = \
-        /* 1.5 * graph->tvwgt / ctrl->coarsen_to; */
-        1.5*graph->tvwgt / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+    for (int i = 0; i < graph->ncon; ++i) {
+      ctrl->maxvwgt[i] = \
+          /* 1.5 * graph->tvwgt / ctrl->coarsen_to; */
+          1.5*graph->tvwgt[i] / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+    }
   }
   dlthread_barrier(ctrl->comm);
 
   cnvtxs = par_aggregate_graph(ctrl,graph,gmatch,fcmap);    // find a match
 
-  par_contract_chunk_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
+  int single_chunk = 1;
+  for (int i = 0; i < nthreads; ++i) {
+    if (graph->chunkcnt[i] > 1) {
+      single_chunk = 0;
+      break;
+    }
+  }
+  if (single_chunk) {
+    graph->free_adjncy = 1;
+    graph->free_adjwgt = 1;
+
+    {
+      time_t current_time;
+      struct tm * time_info;
+      char time_string[9];
+      current_time = time(NULL);
+      time_info = localtime(&current_time);
+      strftime(time_string, 9, "%H:%M:%S", time_info);
+      fprintf(stderr, "[%s] single chunk contraction\n", time_string);
+    }
+
+    // the chunk structure is backward-compatible when there is only one chunk
+    par_contract_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
+
+    {
+      // manually maintain the chunk info structures
+      graph->coarser->chunkcnt[myid] = 1;
+      graph->coarser->chunkofst[myid] = vtx_alloc(2);
+      graph->coarser->chunkofst[myid][0] = 0;
+      graph->coarser->chunkofst[myid][1] = graph->coarser->mynvtxs[myid];
+    }
+  } else {
+    {
+      time_t current_time;
+      struct tm * time_info;
+      char time_string[9];
+      current_time = time(NULL);
+      time_info = localtime(&current_time);
+      strftime(time_string, 9, "%H:%M:%S", time_info);
+      fprintf(stderr, "[%s] multi chunk contraction\n", time_string);
+    }
+
+    par_contract_chunk_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
+  }
 
   dlthread_free_shmem(gmatch,ctrl->comm);
 

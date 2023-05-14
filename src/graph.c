@@ -14,10 +14,13 @@
 #define MTMETIS_GRAPH_C
 
 
+#define _DEFAULT_SOURCE
 
 
 #include "graph.h"
 #include "check.h"
+
+#include <sys/mman.h>
 
 
 
@@ -107,6 +110,7 @@ static void S_par_graph_alloc_unified(
     adj_type ** const r_unedges)
 {
   tid_type t;
+  int ncon = graph->ncon;
   gau_ptrs_type * ptr;
 
   tid_type const myid = dlthread_get_id(graph->comm);
@@ -116,7 +120,7 @@ static void S_par_graph_alloc_unified(
   if (myid == 0) {
     ptr->xadj = adj_alloc(graph->nvtxs+1);
     ptr->adjncy = vtx_alloc(graph->nedges);
-    ptr->vwgt = wgt_alloc(graph->nvtxs);
+    ptr->vwgt = wgt_alloc(graph->nvtxs*ncon);
     ptr->adjwgt = wgt_alloc(graph->nedges);
     ptr->prefix = vtx_alloc(nthreads+1);
     ptr->nedges = adj_alloc(nthreads+1);
@@ -171,6 +175,9 @@ static void S_graph_free_part(
   if (graph->free_adjwgt) {
     dl_free(graph->adjwgt[myid]);
   }
+
+  /* free chunk structure (although not a big deal) */
+  dl_free(graph->chunkofst[myid]);
 
   /* free auxillery things */
   if (graph->label) {
@@ -640,7 +647,7 @@ static graph_type * S_par_graph_bndgraph(
 
   dlthread_free_shmem(label,ctrl->comm);
 
-  bndgraph = par_graph_setup(ninc,myxadj,myadjncy,myvwgt,myadjwgt,ctrl->comm);
+  bndgraph = par_graph_setup(ninc,1,myxadj,myadjncy,myvwgt,myadjwgt,ctrl->comm);
 
   if (myid == 0) {
     bndgraph->label = r_vtx_alloc(nthreads);
@@ -1207,15 +1214,12 @@ static tid_type S_par_graph_extract_halves_group(
  */
 static void S_par_distribute_block(
     vtx_type const nvtxs,
-    size_t   const adjchunksize,
     adj_type const * const xadj,
     vtx_type * const mynvtxs,
     adj_type * const mynedges,
     vtx_type ** const label,
     vtx_type * const rename,
     tid_type * const owner,
-    size_t   * const chunkcnt,
-    vtx_type ** const chunkofst,
     dlthread_comm_t const comm)
 {
   vtx_type i, v, chunkstart, chunkend;
@@ -1267,19 +1271,6 @@ static void S_par_distribute_block(
 
   mynedges[myid] = prefixsum[vtxdist[myid+1]] - prefixsum[vtxdist[myid]];
   mynvtxs[myid] = vtxdist[myid+1] - vtxdist[myid];
-
-  /* further divide to make chunks */
-  chunkcnt[myid] = (mynedges[myid] - 1) / adjchunksize + 1;
-  size_t nchunks = chunkcnt[myid];
-  chunkofst[myid] = vtx_alloc(chunkcnt[myid] + 1);
-  chunkofst[myid][0] = 0;
-
-  adj_type * myprefixsum = prefixsum+vtxdist[myid];
-  for (int c = 0; c < nchunks; ++c) {
-    adj_type target = myprefixsum[0] + ((mynedges[myid]+(nchunks-1))/nchunks)*(c+1);
-    vtx_type ofst = adj_binarysearch(myprefixsum, target, mynvtxs[myid]+1);
-    chunkofst[myid][c+1] = ofst;
-  }
 
   label[myid] = vtx_alloc(mynvtxs[myid]);
 
@@ -1386,8 +1377,6 @@ static void S_par_distribute_blockcyclic(
     vtx_type const block,
     dlthread_comm_t const comm)
 {
-  exit(1);    // disabled for debugging
-
   vtx_type i, v, k, chunkstart, chunkend;
   adj_type sum;
   adj_type * prefixsum;
@@ -1448,8 +1437,11 @@ static void S_par_distribute_blockcyclic(
   /* each thread populates its array portions */
   v = 0;
   for (k=vtxdist[myid];k<vtxdist[myid+1];++k) {
-    i = perm[k];  // distributed vertices aren't in order
-                  // because they have been vtx_blockcyclicperm()'d
+    /** distributed vertices aren't in order, because they have been
+     * vtx_blockcyclicperm()'d; but that's fine as long as the chunk is big
+     * enough that fseek() operations become free. */
+    i = perm[k];
+
     label[myid][v] = i;
     rename[i] = v++;
     owner[i] = myid;
@@ -1651,16 +1643,23 @@ graph_type * graph_distribute(
   graph->dist = dist;
 
   /* setup tvwgt */
-  graph->tvwgt = 0;
+  graph->tvwgt = malloc(sizeof(twgt_type) * graph->ncon);
+  for (int i = 0; i < graph->ncon; ++i) graph->tvwgt[i] = 0;
   if (vwgt) {
-    for (myid=0;myid<nthreads;++myid) {
-      graph->tvwgt += wgt_sum(graph->vwgt[myid],graph->mynvtxs[myid]);
+    for (int t = 0; t < graph->ncon; ++t) {
+      for (myid=0;myid<nthreads;++myid) {
+        graph->tvwgt[t] += wgt_sum_step(graph->vwgt[myid]+t,graph->mynvtxs[myid]*graph->ncon, graph->ncon);
+      }
     }
   } else {
-    graph->tvwgt = graph->nvtxs;
+    for (int t = 0; t < graph->ncon; ++t) {
+      graph->tvwgt[t] = graph->nvtxs;
+    }
     graph->uniformvwgt = 1;
   }
-  graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
+  for (int t = 0; t < graph->ncon; ++t) {
+    graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
+  }
 
   /* setup tadjwgt */
   graph->tadjwgt = 0;
@@ -1718,7 +1717,7 @@ void graph_gather(
 
   gxadj = adj_alloc(graph->nvtxs+1);
   gadjncy = vtx_alloc(graph->nedges);
-  gvwgt = wgt_alloc(graph->nvtxs);
+  gvwgt = wgt_alloc(graph->nvtxs*graph->ncon);
   gadjwgt = wgt_alloc(graph->nedges);
 
   /* create the vertex offsets */
@@ -1731,9 +1730,9 @@ void graph_gather(
   l = 0;
   for (myid=0;myid<nthreads;++myid) {
     if (do_vwgt) {
-      wgt_copy(gvwgt+g,vwgt[myid],mynvtxs[myid]);
+      wgt_copy(gvwgt+g*graph->ncon,vwgt[myid],mynvtxs[myid]*graph->ncon);
     } else {
-      wgt_set(gvwgt+g,1,mynvtxs[myid]);
+      wgt_set(gvwgt+g*graph->ncon,1,mynvtxs[myid]*graph->ncon);
     }
     if (do_adjwgt) {
       wgt_copy(gadjwgt+l,adjwgt[myid],mynedges[myid]);
@@ -1779,6 +1778,7 @@ graph_type * graph_setup_coarse(
 
   graph_type * cgraph;
   tid_type myid;
+  int ncon = graph->ncon;
 
   tid_type const nthreads = graph->dist.nthreads;
 
@@ -1794,8 +1794,14 @@ graph_type * graph_setup_coarse(
   graph_calc_dist(vtx_max_value(cgraph->mynvtxs,nthreads),nthreads, \
       &cgraph->dist);
 
-  cgraph->tvwgt = graph->tvwgt;
-  cgraph->invtvwgt = graph->invtvwgt;
+  // FIXME: need to change tvwgt into array
+  cgraph->ncon = ncon;
+  cgraph->tvwgt = malloc(sizeof(twgt_type)*ncon);
+  cgraph->invtvwgt = malloc(sizeof(real_type)*ncon);
+  for (int i=0; i<ncon; i++) {
+    cgraph->tvwgt[i] = graph->tvwgt[i];
+    cgraph->invtvwgt[i] = graph->invtvwgt[i];
+  }
 
   DL_ASSERT(cgraph != NULL,"cgraph is NULL");
 
@@ -1804,7 +1810,7 @@ graph_type * graph_setup_coarse(
 
     cgraph->xadj[myid] = adj_alloc(cnvtxs[myid]+1);
     if (cgraph->mynvtxs[myid] > 0) {
-      cgraph->vwgt[myid] = wgt_alloc(cnvtxs[myid]);
+      cgraph->vwgt[myid] = wgt_alloc(cnvtxs[myid] * graph->ncon);
     } else {
       cgraph->xadj[myid][0] = 0;
       cgraph->vwgt[myid] = NULL;
@@ -1828,21 +1834,29 @@ void graph_setup_twgts(
 {
   vtx_type i;
   adj_type j;
-  twgt_type vsum,asum;
+  twgt_type *vsum,asum;
+  vsum = malloc(sizeof(twgt_type) * graph->ncon);
   tid_type myid;
 
   tid_type const nthreads = graph->dist.nthreads;
 
   if (graph->uniformvwgt) {
-    vsum = graph->nvtxs;
+    for (i=0;i<graph->ncon;++i) {
+      vsum[i] = graph->nvtxs;
+    }
   } else {
-    vsum = 0;
-    for (myid=0;myid<nthreads;++myid) {
-      for (i=0;i<graph->mynvtxs[myid];++i) {
-        vsum += graph->vwgt[myid][i];
+    for (int t=0;t<graph->ncon;++t) {
+      vsum[t] = 0;
+      for (myid=0;myid<nthreads;++myid) {
+        for (i=0;i<graph->mynvtxs[myid];++i) {
+          vsum[t] += graph->vwgt[myid][i*graph->ncon+t];
+        }
       }
+      graph->tvwgt[t] = vsum[t];
+      graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
     }
   }
+  free(vsum);
 
   if (graph->uniformadjwgt) {
     asum = graph->nedges;
@@ -1855,9 +1869,7 @@ void graph_setup_twgts(
     }
   }
 
-  graph->tvwgt = vsum;
   graph->tadjwgt = asum;
-  graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
 }
 
 
@@ -1871,7 +1883,7 @@ void graph_alloc_partmemory(
 
   /* memory for the partition/refinement structure */
   graph->where = r_pid_alloc(nthreads);
-  graph->pwgts = wgt_alloc(ctrl->nparts);
+  graph->pwgts = wgt_alloc(ctrl->nparts * graph->ncon);
 
   for (myid=0;myid<nthreads;++myid) {
     graph->where[myid] = pid_alloc(graph->mynvtxs[myid]);
@@ -1898,6 +1910,9 @@ void graph_free(
   dl_free(graph->adjwgt);
   dl_free(graph->mynvtxs);
   dl_free(graph->mynedges);
+
+  dl_free(graph->chunkcnt);
+  dl_free(graph->chunkofst);
 
   if (graph->cmap) {
     dl_free(graph->cmap);
@@ -1958,23 +1973,40 @@ void graph_free_rdata(
   }
 }
 
-
+// TODO: this function needs to be thoroughly understood
 double graph_imbalance(
     graph_type const * const graph,
     pid_type const nparts,
     real_type const * const pijbm)
 {
-  vtx_type k;
+  int ncon = graph->ncon;
   double max, cur;
 
-  DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,nparts),graph->tvwgt,"%"PF_TWGT_T);
+  for (int t = 0; t < ncon; ++t) {
+    // wgt_type tmp = wgt_lsum(graph->pwgts,nparts);
+    printf("graph.c line 1988, constraint #%d: ", t);
+    for (int i = 0; i < nparts; ++i) {
+      printf("%"PF_TWGT_T" ", graph->pwgts[i*ncon+t]);
+    }
+    printf("\n");
+  }
+  for (int t = 0; t < ncon; ++t) {
+    // wgt_type tmp = wgt_lsum(graph->pwgts,nparts);
+    for (int i = 0; i < nparts; ++i) {
+      printf("%"PF_TWGT_T" ", graph->pwgts[i*ncon+t]);
+    }
+    printf("\n");
+    wgt_type tmp = wgt_sum_step(graph->pwgts+t,nparts*ncon,ncon);
+    DL_ASSERT_EQUALS(tmp,graph->tvwgt[t],"%"PF_TWGT_T);
+  }
 
-  max = 0;
+  max = 1.0;
 
-  for (k=0;k<nparts;++k) {
-    cur = graph->pwgts[k]*pijbm[k];
-    if (cur > max) {
-      max = cur;
+  for (int i=0; i<ncon; i++) {
+    for (int j=0; j<nparts; j++) {
+      cur = graph->pwgts[j*ncon+i]*pijbm[j*ncon+i];
+      if (cur > max)
+        max = cur;
     }
   }
 
@@ -1988,19 +2020,33 @@ double graph_imbalance_diff(
     real_type const * const pijbm,
     real_type const ubfactor)
 {
-  vtx_type k;
+  int ncon = graph->ncon;
+
+  vtx_type i, j;
   double max, cur;
 
-  DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,nparts),graph->tvwgt,"%"PF_TWGT_T);
+  for (i=0;i<ncon;++i) {
+    DL_ASSERT_EQUALS(wgt_sum_step(graph->pwgts+i,nparts*ncon,ncon),graph->tvwgt[i],"%"PF_TWGT_T);
+  }
+  // DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,nparts),graph->tvwgt[0],"%"PF_TWGT_T);
 
-  max = 0;
-
-  for (k =0;k<nparts;++k) {
-    cur = graph->pwgts[k]*pijbm[k]-ubfactor;
-    if (cur > max) {
-      max = cur;
+  max = -1.0;
+  for (i=0; i<ncon; i++) {
+    for (j=0; j<nparts; j++) {
+      cur = graph->pwgts[j*ncon+i]*pijbm[j*ncon+i] - ubfactor;
+      if (cur > max)
+        max = cur;
     }
   }
+
+  // max = 0;
+
+  // for (k =0;k<nparts;++k) {
+  //   cur = graph->pwgts[k]*pijbm[k]-ubfactor;
+  //   if (cur > max) {
+  //     max = cur;
+  //   }
+  // }
 
   return max;
 }
@@ -2119,7 +2165,7 @@ size_t graph_size(
   }
 
   if (graph->vwgt) {
-    nbytes += (sizeof(wgt_type)*nvtxs) + (sizeof(wgt_type*)*nthreads);
+    nbytes += (sizeof(wgt_type)*nvtxs * graph->ncon) + (sizeof(wgt_type*)*nthreads);
   }
 
   if (graph->adjncy) {
@@ -2174,7 +2220,7 @@ size_t graph_size_gross(
   if (graph->group)  { nbytes += (sizeof(pid_type)*nvtxs); }  // which thread the node belongs to
 
   if (graph->xadj)   { nbytes += (sizeof(adj_type)*nvtxs); }  // +1 omitted
-  if (graph->vwgt)   { nbytes += (sizeof(wgt_type)*nvtxs); }
+  if (graph->vwgt)   { nbytes += (sizeof(wgt_type)*nvtxs * graph->ncon); }
   if (graph->cmap)   { nbytes += (sizeof(vtx_type)*nvtxs); }
   if (graph->rename) { nbytes += (sizeof(vtx_type)*nvtxs); }
   if (graph->label)  { nbytes += (sizeof(vtx_type)*nvtxs); }
@@ -2224,24 +2270,30 @@ graph_type * par_graph_create(
 
 graph_type * par_graph_setup(
     vtx_type const nvtxs,
+    int ncon,
     adj_type * const xadj,
     vtx_type * const adjncy,
     wgt_type * const vwgt,
     wgt_type * const adjwgt,
     dlthread_comm_t const comm)
 {
-  wgt_type asum, vsum;
+  fprintf(stderr, "%d: ncon = %d\n", __LINE__, ncon);
+
+  wgt_type asum, *vsum;
+  vsum = malloc(sizeof(wgt_type)*ncon);
   graph_type * graph;
 
   tid_type const myid = dlthread_get_id(comm);
   tid_type const nthreads = dlthread_get_nthreads(comm);
 
   graph = par_graph_create(comm);
+  if (myid == 0) graph->ncon = ncon;
+  dlthread_barrier(comm);
 
 
   graph->mynvtxs[myid] = nvtxs;
   graph->mynedges[myid] = xadj[nvtxs];
-  graph->xadj[myid] = xadj;   // Caveat wtm: LEAK ?????
+  graph->xadj[myid] = xadj;
   graph->adjncy[myid] = adjncy;
   if (adjwgt) {
     graph->adjwgt[myid] = adjwgt;
@@ -2255,12 +2307,14 @@ graph_type * par_graph_setup(
   }
   if (vwgt) {
     graph->vwgt[myid] = vwgt;
-    vsum = wgt_sum(graph->vwgt[myid],graph->mynvtxs[myid]);
-    vsum = wgt_dlthread_sumreduce(vsum,graph->comm);
+    for (int i=0; i<ncon; i++) {
+      vsum[i] = wgt_sum_step(graph->vwgt[myid]+i,graph->mynvtxs[myid]*ncon,ncon);
+      vsum[i] = wgt_dlthread_sumreduce(vsum[i],graph->comm);
+    }
     graph->free_vwgt = 0;
   } else {
-    vsum = nvtxs;
-    graph->vwgt[myid] = wgt_init_alloc(1,nvtxs);
+    for (int i=0; i<ncon; i++) { vsum[i] = nvtxs; }
+    graph->vwgt[myid] = wgt_init_alloc(1,nvtxs*ncon);
     graph->uniformvwgt = 1;
   }
 
@@ -2281,9 +2335,9 @@ graph_type * par_graph_setup(
     }
     if (graph->free_vwgt) {
       /* we have all 1's for vertex wegiht */
-      graph->tvwgt = graph->nvtxs;
+      graph->tvwgt[0] = graph->nvtxs;
     }
-    graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
+    graph->invtvwgt[0] = 1.0/(graph->tvwgt[0] > 0 ? graph->tvwgt[0] : 1);
   }
   dlthread_barrier(comm);
 
@@ -2300,19 +2354,30 @@ void par_graph_setup_twgts(
 {
   vtx_type i;
   adj_type j;
-  twgt_type vsum, asum;
+  twgt_type * vsum, asum;
+  fprintf(stderr, "ncon = %d\n", graph->ncon);
+  vsum = malloc(sizeof(twgt_type)*graph->ncon);
 
   tid_type const myid = dlthread_get_id(graph->comm);
 
   if (graph->uniformvwgt) {
-    vsum = graph->nvtxs;
+    for (i=0;i<graph->ncon;++i)
+      vsum[i] = graph->nvtxs;
   } else {
-    vsum = 0;
-    for (i=0;i<graph->mynvtxs[myid];++i) {
-      vsum += graph->vwgt[myid][i];
+    for (int t=0;t<graph->ncon;++t) {
+      vsum[t] = 0;
+      for (i=0;i<graph->mynvtxs[myid];++i) {
+        vsum[t] += graph->vwgt[myid][i*graph->ncon+t];
+      }
+      vsum[t] = twgt_dlthread_sumreduce(vsum[t],graph->comm);
+      if (myid == 0) {
+        graph->tvwgt[t] = vsum[t];
+        graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
+      }
     }
-    vsum = twgt_dlthread_sumreduce(vsum,graph->comm);
   }
+  free(vsum);
+
   if (graph->uniformadjwgt) {
     asum = graph->nedges;
   } else {
@@ -2324,9 +2389,7 @@ void par_graph_setup_twgts(
   }
  
   if (myid == 0) {
-    graph->tvwgt = vsum;
     graph->tadjwgt = asum;
-    graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
   }
   dlthread_barrier(graph->comm);
 }
@@ -2337,24 +2400,32 @@ void par_chunk_graph_setup_twgts(
 {
   vtx_type i;
   adj_type j;
-  twgt_type vsum;
+  twgt_type * vsum;
+  vsum = malloc(sizeof(twgt_type)*graph->ncon);
 
   tid_type const myid = dlthread_get_id(graph->comm);
 
   if (graph->uniformvwgt) {
-    vsum = graph->nvtxs;
+    for (i=0;i<graph->ncon;++i)
+      vsum[i] = graph->nvtxs;
   } else {
-    vsum = 0;
-    for (i=0;i<graph->mynvtxs[myid];++i) {
-      vsum += graph->vwgt[myid][i];
+    for (int t=0;t<graph->ncon;++t) {
+      vsum[t] = 0;
+      for (i=0;i<graph->mynvtxs[myid];++i) {
+        vsum[t] += graph->vwgt[myid][i];
+      }
+      vsum[t] = twgt_dlthread_sumreduce(vsum[t],graph->comm);
+      if (myid == 0) {
+        graph->tvwgt[t] = vsum[t];
+        graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
+      }
     }
-    vsum = twgt_dlthread_sumreduce(vsum,graph->comm);
   }
+  free(vsum);
 
+  asum = twgt_dlthread_sumreduce(asum,graph->comm);
   if (myid == 0) {
-    graph->tvwgt = vsum;
     graph->tadjwgt = asum;
-    graph->invtvwgt = 1.0/(graph->tvwgt > 0 ? graph->tvwgt : 1);
   }
   dlthread_barrier(graph->comm);
 }
@@ -2457,6 +2528,7 @@ void par_graph_gather(
   adj_type * gxadj;
   vtx_type * gadjncy;
   wgt_type * gvwgt, * gadjwgt;
+  int ncon = graph->ncon;
 
   /* unified graph parts */
   adj_type * uxadj;
@@ -2489,7 +2561,7 @@ void par_graph_gather(
   eoff = unedges[myid];
   gxadj = uxadj + voff;
   gadjncy = uadjncy + eoff;
-  gvwgt = uvwgt + voff;
+  gvwgt = uvwgt + voff * ncon;
   gadjwgt = uadjwgt + eoff;
 
   /* vertex ids are purely based on thread offsets */
@@ -2515,9 +2587,9 @@ void par_graph_gather(
 
   /* propagate weights */
   if (do_vwgt) {
-    wgt_copy(gvwgt,vwgt,mynvtxs);
+    wgt_copy(gvwgt,vwgt,mynvtxs*ncon);
   } else {
-    wgt_set(gvwgt,1,mynvtxs);
+    wgt_set(gvwgt,1,mynvtxs*ncon);
   }
   if (do_adjwgt) {
     wgt_copy(gadjwgt,adjwgt,mynedges);
@@ -2546,6 +2618,10 @@ void par_graph_shuffle(
     pid_type const * const * const gwhere,
     int const wgts)
 {
+  // hopefully no one calls this function...
+  // TODO: change vwgt references into array-indexing
+  exit(1);
+
   vtx_type v, g, i, k, l, lvtx, smynvtxs, maxnvtxs;
   adj_type j, smynedges;
   tid_type nbrid, t, o;
@@ -2789,6 +2865,7 @@ graph_type * par_graph_setup_coarse(
 {
   vtx_type mynvtxs;
   graph_type * cgraph;
+  int ncon = graph->ncon;
 
   tid_type const myid = dlthread_get_id(graph->comm);
   tid_type const nthreads = dlthread_get_nthreads(graph->comm);
@@ -2801,8 +2878,18 @@ graph_type * par_graph_setup_coarse(
 
     cgraph->level = graph->level + 1;
 
-    cgraph->tvwgt = graph->tvwgt;
-    cgraph->invtvwgt = graph->invtvwgt;
+    // allocate tvwgt and invtvwgt
+    cgraph->ncon = ncon;
+    cgraph->tvwgt = malloc(sizeof(twgt_type)*ncon);
+    cgraph->invtvwgt = real_alloc(ncon);
+
+    // initialize the array values using for loop:
+    // cgraph->tvwgt = graph->tvwgt;
+    // cgraph->invtvwgt = graph->invtvwgt;
+    for (int i = 0; i < ncon; ++i) {
+      cgraph->tvwgt[i] = graph->tvwgt[i];
+      cgraph->invtvwgt[i] = graph->invtvwgt[i];
+    }
   }
   dlthread_barrier(graph->comm);
 
@@ -2816,7 +2903,7 @@ graph_type * par_graph_setup_coarse(
   mynvtxs = cnvtxs;
 
   cgraph->xadj[myid] = adj_alloc(mynvtxs+1);
-  cgraph->vwgt[myid] = wgt_alloc(mynvtxs);
+  cgraph->vwgt[myid] = wgt_alloc(mynvtxs*ncon);
 
   cgraph->adjncy[myid] = NULL;
   cgraph->adjwgt[myid] = NULL;
@@ -2854,7 +2941,7 @@ void par_graph_alloc_partmemory(
   if (myid == 0) {
     /* memory for the partition/refinement structure */
     graph->where = r_pid_alloc(nthreads);
-    graph->pwgts = wgt_alloc(ctrl->nparts);
+    graph->pwgts = wgt_alloc(ctrl->nparts * graph->ncon);
   }
   dlthread_barrier(graph->comm);
 
@@ -3034,6 +3121,13 @@ void par_graph_removeislands(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  // hopefully no one calls this...
+  exit(1);
+  if (graph->ncon > 1) {
+    dl_error("Island removal is only supported for single-constraint graphs");
+  }
+
+#if 0
   vtx_type i, k, nislands, nvtxs, lvtx, mynvtxs;
   adj_type j;
   pid_type p;
@@ -3069,15 +3163,15 @@ void par_graph_removeislands(
   /* implicit barrier */
   iwgt = wgt_dlthread_sumreduce(iwgt,ctrl->comm);
 
-  if (iwgt < MIN_ISLAND_WEIGHT * graph->tvwgt) {
+  if (iwgt < MIN_ISLAND_WEIGHT * graph->tvwgt[0]) {
     /* not worth it */
     par_dprintf("Not removing islands: %0.03lf%%\n", \
-        100.0*iwgt/(double)graph->tvwgt);
+        100.0*iwgt/(double)graph->tvwgt[0]);
     return;
   }
 
   par_dprintf("Removing islands: %0.03lf%%\n", \
-      100.0*iwgt/(double)graph->tvwgt);
+      100.0*iwgt/(double)graph->tvwgt[0]);
 
   grename = dlthread_get_shmem(nthreads*sizeof(vtx_type*),ctrl->comm);
   grename[myid] = rename = vtx_alloc(mynvtxs);
@@ -3153,14 +3247,14 @@ void par_graph_removeislands(
 
   /* adjust ctrl */
   if (myid == 0) {
-    ctrl->ubfactor *= graph->tvwgt/(real_type)(graph->tvwgt - iwgt);
+    ctrl->ubfactor *= graph->tvwgt[0]/(real_type)(graph->tvwgt[0] - iwgt);
 
-    graph->tvwgt -= iwgt;
-    graph->invtvwgt = 1.0 / graph->tvwgt;
+    graph->tvwgt[0] -= iwgt;
+    graph->invtvwgt[0] = 1.0 / graph->tvwgt[0];
 
     if (ctrl->pijbm) {
       for (p=0;p<ctrl->nparts;++p) {
-        ctrl->pijbm[p] = graph->invtvwgt / ctrl->tpwgts[p];
+        ctrl->pijbm[p] = graph->invtvwgt[0] / ctrl->tpwgts[p];
       }
     }
 
@@ -3186,6 +3280,7 @@ void par_graph_removeislands(
 
   par_dprintf("Removed %"PF_VTX_T" islands for new balance constraint of %" \
       PF_REAL_T"\n",nislands,ctrl->ubfactor);
+#endif
 }
 
 
@@ -3194,6 +3289,13 @@ void par_graph_restoreislands(
     graph_type * const graph,
     pid_type * const * const gwhere)
 {
+  // hopefully no one calls this...
+  exit(1);
+  if (graph->ncon > 1) {
+    dl_error("Restore islands is only supported for single constraint graphs");
+  }
+
+#if 0
   vtx_type i, mynvtxs;
   pid_type p, nparts;
   wgt_type iwgt, excess, twgt, uwgt;
@@ -3233,14 +3335,14 @@ void par_graph_restoreislands(
   graph->mynvtxs[myid] += graph->nislands[myid];
 
   if (myid == 0) {
-    ctrl->ubfactor *= graph->tvwgt/(real_type)(graph->tvwgt + twgt);
+    ctrl->ubfactor *= graph->tvwgt[0]/(real_type)(graph->tvwgt[0] + twgt);
 
     graph->tvwgt += twgt;
-    graph->invtvwgt = 1.0 / graph->tvwgt;
+    graph->invtvwgt[0] = 1.0 / graph->tvwgt[0];
 
     if (ctrl->pijbm) {
       for (p=0;p<ctrl->nparts;++p) {
-        ctrl->pijbm[p] = graph->invtvwgt / ctrl->tpwgts[p];
+        ctrl->pijbm[p] = graph->invtvwgt[0] / ctrl->tpwgts[p];
       }
     }
   }
@@ -3250,7 +3352,7 @@ void par_graph_restoreislands(
   if (myid == 0) {
     excess = 0;
     for (p=0;p<nparts;++p) {
-      uwgt = (ctrl->tpwgts[p]*graph->tvwgt)-graph->pwgts[p];
+      uwgt = (ctrl->tpwgts[p]*graph->tvwgt[0])-graph->pwgts[p];
       if (uwgt < 0) {
         uwgt = 0;
       }
@@ -3291,6 +3393,7 @@ void par_graph_restoreislands(
 
   /* free unused stuff */
   dlthread_free_shmem(fpwgts,ctrl->comm);
+#endif
 }
 
 
@@ -3300,6 +3403,13 @@ void par_graph_extract_parts(
     pid_type const nparts,
     graph_type ** const parts)
 {
+  // hopefully no one calls this...
+  exit(1);
+  if (graph->ncon > 1) {
+    dl_error("extract parts is only supported for single constraint graphs");
+  }
+
+#if 0
   /* This funciton needs to handle cases where nparts < nthreads and
    * nparts > nthreads. The latter will imply that it can be executed serially
    * without issue. We will assume that in hte case that nthreads > nparts,
@@ -3532,19 +3642,27 @@ void par_graph_extract_parts(
 
   /* implicit barrier */
   dlthread_free_shmem(vprefix,graph->comm); /* vsuffix is part of this */
+#endif
 }
 
 
 graph_type * par_graph_distribute(
     int const distribution,
     vtx_type const nvtxs,
+    int ncon,
     size_t   const adjchunksize,
     adj_type const * const xadj,
     vtx_type const * const adjncy,
+    int is_mmaped,
     wgt_type const * const vwgt,
     wgt_type const * const adjwgt,
     dlthread_comm_t const comm)
 {
+  printf("%d ncon = %d\n", __LINE__, ncon);
+  assert(ncon >= 1);
+  if (ncon == 0)
+    ncon = 1;     // will be automatically set to uniform vwgt
+  printf("%d ncon = %d\n", __LINE__, ncon);
   vtx_type i, k, v, mynvtxs, lvtx;
   adj_type j, l;
   tid_type nbrid;
@@ -3585,7 +3703,13 @@ graph_type * par_graph_distribute(
 */
 
   graph = par_graph_create(comm);
+  graph->ncon = ncon;
+  graph->tvwgt = malloc(sizeof(twgt_type)*ncon);
+  graph->invtvwgt = malloc(sizeof(real_type)*ncon);
 
+  /* NOTE: since graph distribution always happens only for the original input
+   * graph, we assume that the input graph has uniform weight, i.e. the edges
+   * are uniformly weighted for the input graph. */
   graph->uniformadjwgt = 1;
 
   owner = dlthread_get_shmem((sizeof(*owner)*nvtxs) + \
@@ -3602,6 +3726,13 @@ graph_type * par_graph_distribute(
   dchunkcnt = graph->chunkcnt;
   dchunkofst = graph->chunkofst;
 
+  size_t tmp =
+      adjchunksize > xadj[nvtxs] ? xadj[nvtxs] : adjchunksize;
+  dchunkofst[myid] = vtx_alloc(xadj[nvtxs] * 4.0 / tmp);
+
+  dchunkcnt[myid] = 0;
+  dchunkofst[myid][0] = 0;
+
   if (myid == 0) {
     /* labels must be explicitly allocated */
     graph->label = r_vtx_alloc(nthreads);
@@ -3616,8 +3747,8 @@ graph_type * par_graph_distribute(
   /* handle different distributions */
   switch(distribution) {
     case MTMETIS_DISTRIBUTION_BLOCK:
-      S_par_distribute_block(nvtxs,adjchunksize,xadj,dmynvtxs,dmynedges,dlabel,rename, \
-          owner,dchunkcnt,dchunkofst,comm);
+      S_par_distribute_block(nvtxs,xadj,dmynvtxs,dmynedges,dlabel,rename, \
+          owner,comm);
       break;
     case MTMETIS_DISTRIBUTION_CYCLIC:
       exit(1);    // TODO disabled for debugging
@@ -3625,7 +3756,6 @@ graph_type * par_graph_distribute(
           owner,comm);
       break;
     case MTMETIS_DISTRIBUTION_BLOCKCYCLIC:
-      exit(1);    // TODO disabled for debugging
       S_par_distribute_blockcyclic(nvtxs,xadj,dmynvtxs,dmynedges,dlabel, \
          rename,owner,4096,comm);
       break;
@@ -3636,24 +3766,30 @@ graph_type * par_graph_distribute(
   graph_calc_dist(vtx_max_value(dmynvtxs,nthreads),nthreads,&dist);
 
   /* allocate arrays */
+  size_t adjncy_chunksize =
+      adjchunksize > dmynedges[myid] ? dmynedges[myid] : adjchunksize;
   mynvtxs = dmynvtxs[myid];
   dxadj[myid] = adj_alloc(mynvtxs+1);
   dxadj[myid][0] = 0;
-  // dadjncy[myid] = vtx_alloc(dmynedges[myid]);   // chunks! shouldn't allocate this much
-  dadjncy[myid] = vtx_alloc(adjchunksize*1.1);     // FIXME: 解决二分区块不精确的问题, max(chunksize[myid])
-  dvwgt[myid] = wgt_alloc(mynvtxs);
-  // dadjwgt[myid] = wgt_alloc(dmynedges[myid]);   // TODO chunks
-  dadjwgt[myid] = wgt_alloc(adjchunksize*1.1);
+  dadjncy[myid] = vtx_alloc(adjncy_chunksize);    // TODO: we can bypass this buffer entirely
+  dvwgt[myid] = wgt_alloc(mynvtxs*ncon);
+  dadjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
   /* zero counts for insertion later */
   dmynedges[myid] = 0;
 
   /* populate edge arrays; slice into chunks */
+  /** TODO: for now, the whole file is read in before distribution takes place.
+   * thus I can do the distribution by doing _RANDOM_ reads and writing
+   * sequentially to binary files (multiple: one for each thread). Someday
+   * eliminate the random reads.
+   */
   l = 0;
   dxadj[myid][0] = 0;
   dlthread_barrier(comm);
   size_t mynowchunk = 0;
   adj_type chunkstart = 0;
+
   char fname1[1024], fname2[1024];
   sprintf(fname1, "dump_graph0_dadjncy_tid%"PF_TID_T".bin", myid);
   sprintf(fname2, "dump_graph0_dadjwgt_tid%"PF_TID_T".bin", myid);
@@ -3666,44 +3802,59 @@ graph_type * par_graph_distribute(
     // when scanning the vertices, jump between chunks
     i = dlabel[myid][v];    /* query the original vertex ID of local vertex v */
                             /* this should be strictly sequential for `block` distribution */
-    while (v >= dchunkofst[myid][mynowchunk+1]) {
+
+    if (l + xadj[i+1] - xadj[i] >= adjchunksize) {
       // dump dadjncy into file
-      size_t chunklen = l;
-      fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
-      fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", chunklen, fname1);
-      fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
+      fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
+      fprintf(stderr, "%"PF_ADJ_T" edges written into %s\n", l, fname1);
+      fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
 
       // then switch to next chunk
-      chunkstart += l;
-      l = 0;
+      chunkstart += l; l = 0;
       ++mynowchunk;
+      
+      dchunkcnt[myid] = mynowchunk;
+      dchunkofst[myid][mynowchunk] = v;
     }
+
     for (j=xadj[i];j<xadj[i+1];++j) {
+      /** LOCALITY preserved with block distribution */
       /* usually this requires random reads in adjncy; but
          for `block` distribution, adjncy is always read sequentially. */
       // fetch_adjncy_chunk(mynowchunk)
 
-      k = adjncy[j];    // TODO: change data read from wildriver library
+      k = adjncy[j];
 
       // drop self-loops
       if (k == i) {
         continue;
       }
 
+      /* retrieve the new name for the node k */
       nbrid = owner[k];
       lvtx = rename[k];
+
+      vtx_type Adjncy, Adjwgt;
       if (nbrid == myid) {
-        dadjncy[myid][l] = lvtx;
+        Adjncy = lvtx;
       } else {
-        dadjncy[myid][l] = lvtx_to_gvtx(lvtx,nbrid,dist);
+        Adjncy = lvtx_to_gvtx(lvtx,nbrid,dist);
       }
       if (adjwgt) {
-        dadjwgt[myid][l] = adjwgt[j];
+        Adjwgt = adjwgt[j];
       } else {
-        dadjwgt[myid][l] = 1;
+        Adjwgt = 1;
       }
+
+      dadjncy[myid][l] = Adjncy;
+      dadjwgt[myid][l] = Adjwgt;
       l++;    /* the edge array is filled sequentially; easy to slice */
     } // finish one vertex v
+
+    if (is_mmaped) {
+      madvise(adjncy+xadj[i], sizeof(vtx_type) * (xadj[i+1] - xadj[i]), MADV_DONTNEED);
+      madvise(adjwgt+xadj[i], sizeof(wgt_type) * (xadj[i+1] - xadj[i]), MADV_DONTNEED);
+    }
 
     // NOTE: a chunk DOESN'T re-number xadj (for backwards compatibility)
     dxadj[myid][v+1] = l + chunkstart;
@@ -3711,12 +3862,22 @@ graph_type * par_graph_distribute(
   dmynedges[myid] = dxadj[myid][mynvtxs];
 
   if (l > 0) {
-    // dump dadjncy into file
-    size_t chunklen = l;
-    fwrite(dadjncy[myid], sizeof(vtx_type), chunklen, dadjncy_dump);
-    fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", chunklen, fname1);
-    fwrite(dadjwgt[myid], sizeof(wgt_type), chunklen, dadjwgt_dump);
+    if (mynowchunk == 0) {
+      // there is only one chunk; do not write to disk
+      fprintf(stderr, "%" PF_ADJ_T " edges kept resident in mem\n", l);
+    } else {
+      // dump dadjncy into file
+      fwrite(dadjncy[myid], sizeof(vtx_type), l, dadjncy_dump);
+      fprintf(stderr, "%" PF_ADJ_T " edges written into %s\n", l, fname1);
+      fwrite(dadjwgt[myid], sizeof(wgt_type), l, dadjwgt_dump);
+    }
+
+    chunkstart += l; l = 0;
+    ++mynowchunk;
+    dchunkcnt[myid] = mynowchunk;
+    dchunkofst[myid][mynowchunk] = mynvtxs;
   }
+
   fclose(dadjncy_dump);
   fclose(dadjwgt_dump);
 
@@ -3724,10 +3885,11 @@ graph_type * par_graph_distribute(
   if (vwgt) {
     for (v=0;v<mynvtxs;++v) {
       i = dlabel[myid][v];
-      dvwgt[myid][v] = vwgt[i];
+      for (int t = 0; t < ncon; ++t)
+        dvwgt[myid][v*ncon + t] = vwgt[i*ncon + t];
     }
   } else {
-    wgt_set(dvwgt[myid],1,mynvtxs);
+    wgt_set(dvwgt[myid],1,mynvtxs * ncon);
   }
 
   /* free owner and rename (owner and rename share one contiguous space) */
@@ -3756,7 +3918,7 @@ graph_type * par_graph_distribute(
     printf("graph distribution done...\n");
     vtx_type mx = 0;
     for (int i = 0; i < nthreads; ++i) {
-      printf("thread %d: c=%zu; %zu: (", i, dchunkcnt[i], dmynvtxs[i]);
+      printf("thread %d: c#=%2zu; [%7zu|%9zu]: (", i, dchunkcnt[i], dmynvtxs[i], dmynedges[i]);
       for (int c = 0; c < dchunkcnt[i]; ++c) {
         printf("%"PF_VTX_T",", dchunkofst[i][c+1] - dchunkofst[i][c]);
       }
