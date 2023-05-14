@@ -40,6 +40,8 @@ static void S_partparams_kway(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  int ncon = graph->ncon;
+
   vtx_type other,me,i,k,lvtx,nbrid,na;
   adj_type j, l;
   wgt_type mincut;
@@ -82,7 +84,7 @@ static void S_partparams_kway(
 
   gpwgts = dlthread_get_shmem(sizeof(wgt_type*)*nthreads,ctrl->comm);
 
-  mypwgts = gpwgts[myid] = wgt_init_alloc(0,nparts);
+  mypwgts = gpwgts[myid] = wgt_init_alloc(0,nparts*ncon);
 
   /* reset the size of neighbor infor array */
   kwinfo = graph->kwinfo + myid; 
@@ -95,18 +97,30 @@ static void S_partparams_kway(
 
   /* calculate partition weights */
   for (i=0;i<mynvtxs;++i) {
-    mypwgts[where[i]] += vwgt[i];
+    for (int k = 0; k < ncon; ++k)
+      mypwgts[where[i]*ncon+k] += vwgt[i*ncon+k];
+    // mypwgts[where[i]] += vwgt[i];
   }
   dlthread_barrier(ctrl->comm);
 
   if (myid == 0) {
     /* someday I need to parallelize this via dlthreads */
     for (i=0; i<nparts;++i) {
-      k = 0;
-      for (j=0; j<nthreads;++j) {
-        k += gpwgts[j][i];
+      for (int t = 0; t < ncon; ++t) {
+        k = 0;
+        for (j=0; j<nthreads;++j) {
+          k += gpwgts[j][i*ncon+t];
+        }
+        pwgts[i*ncon+t] = k;
       }
-      pwgts[i] = k;
+    }
+    for (int t = 0; t < ncon; ++t) {
+      printf("refine.c line 106: ");
+      // wgt_type tmp = wgt_lsum(graph->pwgts,nparts);
+      for (int i = 0; i < nparts; ++i) {
+        printf("%"PF_TWGT_T" ", graph->pwgts[i*ncon+t]);
+      }
+      printf("\n");
     }
   }
 
@@ -209,6 +223,10 @@ static void S_partparams_vsep(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for vsep\n");
+  }
+
   vtx_type me,i,k;
   adj_type j;
   wgt_type minsep;
@@ -312,6 +330,10 @@ static void S_partparams_esep(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for esep\n");
+  }
+
   vtx_type me,i,k,lvtx;
   adj_type j;
   pid_type other;

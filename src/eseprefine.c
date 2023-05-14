@@ -560,8 +560,8 @@ static vtx_type S_eseprefine_FM2S(
   wgt_type * const pwgts = graph->pwgts;
   pid_type * const * const gwhere = graph->where;
   wgt_type const maxbal = \
-      (ctrl->ubfactor-1.0)*(dl_max(tpwgts[0],tpwgts[1])*graph->tvwgt) + \
-      (graph->tvwgt/graph->nvtxs);
+      (ctrl->ubfactor-1.0)*(dl_max(tpwgts[0],tpwgts[1])*graph->tvwgt[0]) + \
+      (graph->tvwgt[0]/graph->nvtxs);
 
   vtx_type const limit = dl_min(dl_max(0.01*graph->nvtxs,15), \
       ctrl->hillsize);
@@ -1071,8 +1071,8 @@ vtx_type par_eseprefine(
       "Bad esinfo before refinement");
   DL_ASSERT(check_esbnd(esinfo->bnd,graph),"Bad boundary before refinement");
 
-  maxpwgt[0] = graph->tvwgt * ctrl->tpwgts[0] * ctrl->ubfactor;
-  maxpwgt[1] = graph->tvwgt * ctrl->tpwgts[1] * ctrl->ubfactor;
+  maxpwgt[0] = graph->tvwgt[0] * ctrl->tpwgts[0] * ctrl->ubfactor;
+  maxpwgt[1] = graph->tvwgt[0] * ctrl->tpwgts[1] * ctrl->ubfactor;
 
   if (graph->nedges < SERIAL_FM_FACTOR*sqrt(graph->dist.nthreads)) {
     nmoves = S_eseprefine_FM1S(ctrl,graph,ctrl->nrefpass,esinfo,maxpwgt);
@@ -1093,7 +1093,7 @@ vtx_type par_eseprefine(
 
   DL_ASSERT_EQUALS(graph->mincut,par_graph_cut(graph, \
         (pid_type const **)graph->where),"%"PF_WGT_T);
-  DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,2),graph->tvwgt,"%"PF_TWGT_T);
+  DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,2),graph->tvwgt[0],"%"PF_TWGT_T);
   DL_ASSERT(check_esbnd(esinfo->bnd,graph),"Bad boundary before refinement");
 
   par_vprintf(ctrl->verbosity,MTMETIS_VERBOSITY_HIGH,"%zu) [%"PF_VTX_T" %" \

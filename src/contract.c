@@ -147,6 +147,7 @@ static void S_par_contract_DENSE(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
   adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -224,7 +225,11 @@ static void S_par_contract_DENSE(
   for (c=0;c<mycnvtxs;++c) {
     cg = lvtx_to_gvtx(c,myid,cdist);
     /* initialize the coarse vertex */
-    mycvwgt[c] = 0;     // the v weight is the sum of original vertices
+    // the v weight is the sum of original vertices
+    for (t=0;t<ncon;++t) {
+      mycvwgt[c*ncon+t] = 0;
+    }
+    // mycvwgt[c] = 0;
 
     v = fcmap[c];
     o = myid;
@@ -234,7 +239,10 @@ static void S_par_contract_DENSE(
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
-      mycvwgt[c] += gvwgt[o][v];
+      for (t=0;t<ncon;++t) {
+        mycvwgt[c*ncon+t] += gvwgt[o][v*ncon+t];
+      }
+      // mycvwgt[c] += gvwgt[o][v];
 
       // this kills locality when accessing the fine graph:
       //   (o, v) = canonical(gmatch[o][v]);
@@ -330,6 +338,7 @@ static void S_par_contract_CLS(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
   adj_type cnedges, l, maxdeg, j, i, jj, start;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -400,7 +409,10 @@ static void S_par_contract_CLS(
   for (c=0;c<mycnvtxs;++c) {
     cg = lvtx_to_gvtx(c,myid,dist);
     /* initialize the coarse vertex */
-    mycvwgt[c] = 0;
+    for (t=0;t<ncon;++t) {
+      mycvwgt[c*ncon+t] = 0;
+    }
+    // mycvwgt[c] = 0;
 
     v = fcmap[c];
     o = myid;
@@ -411,7 +423,10 @@ static void S_par_contract_CLS(
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],dist),"%"PF_VTX_T);
 
       /* transfer over vertex stuff from v and u */
-      mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+      for (t=0;t<ncon;++t) {
+        mycvwgt[c*ncon+t] += graph->uniformvwgt ? 1 : gvwgt[o][v*ncon+t];
+      }
+      // mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
 
       for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
         k = gadjncy[o][j];
@@ -511,6 +526,10 @@ static void S_par_contract_SORT(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  if (graph->ncon > 1) {
+    dl_error("SORT contraction only works for 1-constrained graphs for now\n");
+  }
+
   adj_type cnedges, maxdeg, j, l;
   tid_type o, t;
   vtx_type v, c, cg, k, nlst;

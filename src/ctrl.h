@@ -77,7 +77,7 @@ typedef struct ctrl_type {
   int leafmatch;
   int ondisk;
   vtx_type coarsen_to;
-  wgt_type maxvwgt;
+  wgt_type * maxvwgt;  /* max vertex weight for each balance constraint */
   double stopratio;
   /* initial partitiong parameters */
   size_t ninitsolutions;

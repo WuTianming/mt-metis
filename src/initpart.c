@@ -42,6 +42,7 @@ wgt_type par_initpart_cut(
   tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
 
   vtx_type const nvtxs = graph->nvtxs; 
+  int const ncon = graph->ncon;
 
   size_t const tcuts = ctrl->ninitsolutions; 
 
@@ -61,7 +62,7 @@ wgt_type par_initpart_cut(
     where = pid_alloc(nvtxs);
 
     cut = metis_initcut(ctrl,ctrl->nparts,ctrl->tpwgts,myncuts,1, \
-        nvtxs,xadj,adjncy,vwgt,adjwgt,where);
+        nvtxs,ncon,xadj,adjncy,vwgt,adjwgt,where);
   } else {
     cut = graph->tadjwgt+1;
   }
@@ -110,6 +111,10 @@ wgt_type par_initpart_vsep(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  if (graph->ncon > 1) {
+    dl_error("Multiconstraint not supported for vertex separators\n");
+  }
+
   vtx_type voff, idx;
   wgt_type sep;
   adj_type * xadj;
@@ -152,7 +157,7 @@ wgt_type par_initpart_vsep(
     sep = metis_initsep(ctrl,mynseps,nvtxs,xadj,adjncy,vwgt,adjwgt, \
         where);
   } else {
-    sep = graph->tvwgt+1;
+    sep = graph->tvwgt[0]+1;
   }
 
   idx = wgt_dlthread_minreduce_index(sep,ctrl->comm);

@@ -250,6 +250,8 @@ static wgt_type S_move_vertex(      // uses combuffer_add
     vw_pq_t * const q,
     update_combuffer_t * const combuffer)
 {
+  int ncon = graph->ncon;
+
   vtx_type k;
   adj_type j;
   wgt_type cut, ted, ewgt;
@@ -273,8 +275,12 @@ static wgt_type S_move_vertex(      // uses combuffer_add
 
   cut = 0;
 
-  pwgts[to] += vwgt[i];
-  pwgts[from] -= vwgt[i];
+  for (int k=0;k<ncon;++k) {
+    pwgts[to*ncon+k] += vwgt[i*ncon+k];
+    pwgts[from*ncon+k] -= vwgt[i*ncon+k];
+  }
+  // pwgts[to] += vwgt[i];
+  // pwgts[from] -= vwgt[i];
   where[i] = to;
 
   ted = myrinfo->ed;
@@ -355,6 +361,7 @@ static wgt_type S_move_vertex(      // uses combuffer_add
 static inline void S_par_sync_pwgts(
     tid_type const myid,
     pid_type const nparts,
+    int const ncon,
     wgt_type * const gpwgts,
     wgt_type * const lpwgts,
     dlthread_comm_t const comm)
@@ -362,15 +369,15 @@ static inline void S_par_sync_pwgts(
   pid_type p;
 
   /* turn local pwgts into deltas */
-  for (p=0;p<nparts;++p) {
+  for (p=0;p<nparts*ncon;++p) {
     lpwgts[p] -= gpwgts[p];
   }
 
   /* create global deltas */
-  wgt_dlthread_sumareduce(lpwgts,nparts,comm);
+  wgt_dlthread_sumareduce(lpwgts,nparts*ncon,comm);
 
   /* set local pwgts to be global pwgts */
-  for (p=0;p<nparts;++p) {
+  for (p=0;p<nparts*ncon;++p) {
     lpwgts[p] += gpwgts[p];
   }
 
@@ -378,7 +385,7 @@ static inline void S_par_sync_pwgts(
 
   /* re-sync global pwgts */
   if (myid == 0) {
-    for (p=0;p<nparts;++p) {
+    for (p=0;p<nparts*ncon;++p) {
       gpwgts[p] = lpwgts[p];
     }
   }
@@ -400,9 +407,12 @@ static vtx_type S_par_kwayrefine_GREEDY(
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
+  int ncon = graph->ncon;
+
   vtx_type c, i, k, nmoved;
   adj_type j;
-  wgt_type gain, wgt, mycut, ewgt;
+  wgt_type gain, mycut, ewgt;
+  wgt_type const * myvwgt;
   pid_type to, from;
   size_t pass;
   real_type rgain;
@@ -428,23 +438,29 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
   kwnbrinfo_type * const nbrinfo = kwinfo->nbrinfo;
   pid_type * const where = gwhere[myid];
+
+  // the balance factors `tpwgts` are the same for all constraints for now, hence the vector length being `nparts` instead of `nparts * ncon`
   real_type const * const tpwgts = ctrl->tpwgts;
 
   combuffer = update_combuffer_create(graph->mynedges[myid],ctrl->comm);
 
-  lpwgts = wgt_alloc(nparts);
-  wgt_copy(lpwgts,pwgts,nparts);
+  lpwgts = wgt_alloc(nparts * ncon);
+  // copy pwgts into lpwgts, length = nparts * ncon
+  // part_weights, local_part_weights
+  wgt_copy(lpwgts,pwgts,nparts * ncon);
 
-  minwgt = wgt_alloc(nparts);
-  maxwgt = wgt_alloc(nparts);
+  minwgt = wgt_alloc(nparts * ncon);
+  maxwgt = wgt_alloc(nparts * ncon);
 
 
   bnd = kwinfo->bnd;
 
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
-    maxwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*ctrl->ubfactor;
-    minwgt[i]  = ctrl->tpwgts[i]*graph->tvwgt*(1.0/ctrl->ubfactor);
+    for (int t = 0; t < ncon; ++t) {
+      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ctrl->ubfactor;
+      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ctrl->ubfactor);
+    }
   }
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
@@ -536,10 +552,19 @@ static vtx_type S_par_kwayrefine_GREEDY(
                 dl_min(nparts,graph->xadj[myid][i+1]-graph->xadj[myid][i]));
 
             from = where[i];
-            wgt = vwgt[i];
+            myvwgt = vwgt + i * ncon;
 
-            if (myrinfo->id > 0 && lpwgts[from]-wgt < minwgt[from]) {
-              continue;
+            if (myrinfo->id > 0) {
+              int give_up = 0;
+              for (int t=0; t<ncon; ++t) {
+                if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+                  give_up = 1;
+                  break;
+                }
+              }
+              if (give_up) {
+                continue;
+              }
             }
 
             /* find the first eligible partition */
@@ -548,7 +573,16 @@ static vtx_type S_par_kwayrefine_GREEDY(
               if (!S_right_side(c,to,from)) {
                 continue;
               }
-              if (lpwgts[to]+wgt <= maxwgt[to]) {     // keep nicely balanced after move
+              
+              int overweight = 0;
+              for (int t=0; t<ncon; ++t) {
+                if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                  overweight = 1;
+                  break;
+                }
+              }
+
+              if (!overweight) {     // keep nicely balanced after move
                 if (mynbrs[k].ed >= myrinfo->id) {    // criterion for improvement
                   break;
                 }
@@ -569,7 +603,16 @@ static vtx_type S_par_kwayrefine_GREEDY(
               if (mynbrs[j].ed >= mynbrs[k].ed) {
                 gain = mynbrs[j].ed-myrinfo->id; 
                 DL_ASSERT(gain >= 0, "Invalid gain of %"PF_WGT_T,gain);
-                if ((gain > 0 && lpwgts[to]+wgt <= maxwgt[to]) \
+
+                int overweight = 0;
+                for (int t=0; t<ncon; ++t) {
+                  if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                    overweight = 1;
+                    break;
+                  }
+                }
+
+                if ((gain > 0 && !overweight) \
                     || (mynbrs[j].ed == mynbrs[k].ed && \
                       tpwgts[mynbrs[k].pid]*lpwgts[to] < \
                       tpwgts[to]*lpwgts[mynbrs[k].pid])) {
@@ -581,16 +624,46 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
             if (mynbrs[k].ed >= myrinfo->id) { 
               gain = mynbrs[k].ed-myrinfo->id;
+
+              int overweight1 = 0, overweight2 = 0;
+              for (int t=0; t<ncon; ++t) {
+                if (lpwgts[from*ncon+t] >= maxwgt[from*ncon+t]) {
+                  overweight1 = 1;
+                  break;
+                }
+              }
+              for (int t=0; t<ncon; ++t) {
+                if (tpwgts[to]*lpwgts[from*ncon+t] > \
+                    tpwgts[from]*(lpwgts[to*ncon+t]+myvwgt[t])) {
+                  overweight2 = 1;
+                  break;
+                }
+              }
+
               if (!(gain > 0 || (gain == 0 \
-                        && (lpwgts[from] >= maxwgt[from]  \
-                            || tpwgts[to]*lpwgts[from] > \
-                            tpwgts[from]*(lpwgts[to]+wgt))))) {
+                        && (overweight1 || overweight2)))) {
                 continue;
               }
             }
 
-            if (lpwgts[to] + wgt > maxwgt[to] || 
-                lpwgts[from] - wgt < minwgt[from]) {
+            int overweight = 0;
+            int underweight = 0;
+
+            for (int t=0; t<ncon; ++t) {
+              if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                overweight = 1;
+                break;
+              }
+            }
+
+            for (int t=0; t<ncon; ++t) {
+              if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+                underweight = 1;
+                break;
+              }
+            }
+
+            if (overweight || underweight) {
               /* whatever you do, don't push the red button */
               continue;
             }
@@ -610,7 +683,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
         update_combuffer_clear(combuffer);
 
         /* update my partition weights */
-        S_par_sync_pwgts(myid,nparts,pwgts,lpwgts,ctrl->comm);
+        S_par_sync_pwgts(myid,nparts,ncon,pwgts,lpwgts,ctrl->comm);
 
       } /* end directions */
 

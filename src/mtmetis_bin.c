@@ -474,6 +474,7 @@ int main(
   int rv, times, verbosity;
   size_t nargs;
   vtx_type nvtxs, i;
+  int ncon = 1;
   adj_type * xadj = NULL;
   vtx_type * adjncy = NULL;
   wgt_type * vwgt = NULL, * adjwgt = NULL;
@@ -519,7 +520,14 @@ int main(
     else
       rv = read_400M_dataset(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
   } else {
-    rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy, \
+    /*
+     * the vwgt array (vertex weights) is laid out as follows (example ncon=3):
+     * 0 0 0 1 1 1 2 2 2 3 3 3
+     * where "0 0 0" is the three weights/constraints of vertex 0.
+     * 
+     * the wildriver_read_graph function will allocate the vwgt array for us, and set ncon according to the input file.
+     */
+    rv = wildriver_read_graph(input_file,&nvtxs,NULL,&ncon,NULL,&xadj,&adjncy, \
         &vwgt,&adjwgt);
   }
   
@@ -552,12 +560,16 @@ int main(
   }
 
   if (options[MTMETIS_OPTION_VWGTDEGREE] != MTMETIS_VAL_OFF) {
-    if (!vwgt) {
-      vwgt = wgt_alloc(nvtxs);
-    }
+    ncon = 1;
+    if (vwgt) free(vwgt);
+    vwgt = wgt_alloc(nvtxs);
     for (i=0;i<nvtxs;++i) {
       vwgt[i] = xadj[i+1] - xadj[i];
     }
+  } else if (ncon == 0) {
+    ncon = 1;
+    if (vwgt) { free(vwgt); vwgt = NULL; }
+    // vwgt = wgt_init_alloc(1, nvtxs);
   }
 
   vprintf(verbosity,MTMETIS_VERBOSITY_LOW,"Read '%s' with %"PF_VTX_T \
@@ -569,7 +581,7 @@ int main(
     owhere = pid_alloc(nvtxs);
   }
 
-  if (mtmetis_partition_explicit(nvtxs,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
+  if (mtmetis_partition_explicit(nvtxs,ncon,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
       owhere,NULL) != MTMETIS_SUCCESS) {
     rv = 3;
     goto CLEANUP;

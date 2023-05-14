@@ -41,6 +41,7 @@ typedef struct graph_type {
   vtx_type nvtxs; 
   vtx_type gnvtxs;
   adj_type nedges;
+  vtx_type ncon;    // number of constraints to balance
   /* distribution information */
   dlthread_comm_t comm;
   graphdist_type dist;
@@ -71,8 +72,9 @@ typedef struct graph_type {
   struct esinfo_type * esinfo;
   struct vsinfo_type * vsinfo;
   /* total weight */
-  twgt_type tvwgt, tadjwgt;
-  real_type invtvwgt;
+  twgt_type * tvwgt;        // total weights for each constraint
+  twgt_type tadjwgt;
+  real_type * invtvwgt;     // 1/tvwgt
   /* aliasing */
   vtx_type ** rename;
   vtx_type ** label;
@@ -379,6 +381,7 @@ graph_type * par_graph_create(
  * @brief Setup a graph structure given this threads parts of the graph.
  *
  * @param nvtxs The number of vertices in the graph.
+ * @param ncon The number of weights per vertex.
  * @param xadj The adjacency list pointer.
  * @param adjncy The adjacency list.
  * @param adjwgt The edge weights.
@@ -389,6 +392,7 @@ graph_type * par_graph_create(
  */
 graph_type * par_graph_setup(
     vtx_type nvtxs, 
+    int ncon,
     adj_type * xadj, 
     vtx_type * adjncy, 
     wgt_type * adjwgt, 
@@ -713,6 +717,7 @@ void par_graph_extract_parts(
  *
  * @param dist The type of distribution to use.
  * @param nvtxs The number of vertices in the graph.
+ * @param ncon The number of weights per vertex.
  * @param xadj The adjacency list pointer.
  * @param adjncy The adjacecny list.
  * @param vwgt The vertex weights.
@@ -724,6 +729,7 @@ void par_graph_extract_parts(
 graph_type * par_graph_distribute(
     int distribution,
     vtx_type nvtxs, 
+    int ncon,
     size_t   adjchunksize,
     adj_type const * xadj, 
     vtx_type const * adjncy, 

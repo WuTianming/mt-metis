@@ -303,6 +303,10 @@ int check_esinfo(
 int check_graph(
     graph_type const * const graph)
 {
+  if (graph->ncon != 1) {
+    printf("cannot yet check graphs with ncon > 1\n");
+    return 1;
+  }
   vtx_type mynvtxs, i, v, u, k, m, nvtxs;
   adj_type j, l, nedges;
   tid_type myid, nbrid;
@@ -389,9 +393,9 @@ int check_graph(
   }
 
   /* check sums */
-  if (graph->tvwgt != tvwgt) {
+  if (graph->tvwgt[0] != tvwgt) {
     printf("Total vertex weight is %"PF_TWGT_T", but graph " \
-        "thinks it is %"PF_TWGT_T"\n",tvwgt,graph->tvwgt);
+        "thinks it is %"PF_TWGT_T"\n",tvwgt,graph->tvwgt[0]);
     return 0;
   }
   if (graph->tadjwgt != tadjwgt) {
@@ -399,9 +403,9 @@ int check_graph(
         "thinks it is %"PF_TWGT_T"\n",tadjwgt,graph->tadjwgt);
     return 0;
   }
-  if ((int)(graph->invtvwgt * tvwgt * 1.01) != 1) {
+  if ((int)(graph->invtvwgt[0] * tvwgt * 1.01) != 1) {
     printf("Inverse vertex weight is %lf, but graph " \
-        "thinks it is %lf\n",1.0/tvwgt,graph->invtvwgt);
+        "thinks it is %lf\n",1.0/tvwgt,graph->invtvwgt[0]);
     return 0;
   }
 

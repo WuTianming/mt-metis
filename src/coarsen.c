@@ -75,9 +75,11 @@ graph_type * par_coarsen_graph(
     }
 
     /* set the maximum allowed coarsest vertex weight */
-    ctrl->maxvwgt = \
-        /* 1.5 * graph->tvwgt / ctrl->coarsen_to; */
-        1.5*graph->tvwgt / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+    for (int i = 0; i < graph->ncon; ++i) {
+      ctrl->maxvwgt[i] = \
+          /* 1.5 * graph->tvwgt / ctrl->coarsen_to; */
+          1.5*graph->tvwgt[i] / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+    }
   }
   dlthread_barrier(ctrl->comm);
 

@@ -31,7 +31,7 @@ static void S_ser_write_to_disk(
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
+  ncon   = graph->ncon;     // now supports multiple constraints!
 
   {
     // FIXME: re-allocate when attempting to read back
@@ -139,7 +139,7 @@ ERROR:
 }
 
 /**
- * call with:
+ * intended use case:
  *   graph = par_graph_create(comm);
  *   graph = recover_metadata(ctrl, graph, gid);
 */
@@ -147,6 +147,8 @@ graph_type *  S_ser_recover_graph_metadata(
     ctrl_type * const ctrl,
     graph_type * graph,
     int gID) {
+
+  exit(1);    // this function is unfinished
 
   vtx_type *nvtxs, ncon;
   adj_type *nedges;
@@ -161,7 +163,7 @@ graph_type *  S_ser_recover_graph_metadata(
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
+  ncon   = graph->ncon;     // TODO: this should be read from the metadata file
 
   sprintf(infile, "dump_meta.%d.txt", graph->gID);
   if ((metaout = fopen(infile, "r")) == NULL) {
@@ -219,7 +221,7 @@ static void S_ser_read_from_disk(
 
   nvtxs  = graph->mynvtxs;
   nedges = graph->mynedges;
-  ncon   = 1;  // only 1 type of constraint is supported
+  ncon   = graph->ncon;     // now supports multiple constraints!
 
   if (graph->free_xadj) {
     for (int myid = 0; myid < nthreads; ++myid) {
@@ -274,18 +276,18 @@ static void S_ser_read_from_disk(
   }
 
   fclose(fpin);
-  if (0) {    // FIXME: do not delete to preserve checkpoint
-    printf("ondisk: deleting %s\n", infile);
-    // gk_rmpath(infile);
-    async_rmpath(infile);   // save a few hundred milliseconds
-  }
+
+  // delete the checkpoint files
+  printf("ondisk: deleting %s\n", infile);
+  // gk_rmpath(infile);
+  async_rmpath(infile);   // save a few hundred milliseconds by running in background
 
   graph->gID    = 0;
 
   return;
 
 ERROR:
-  printf("Failed to restore graph %s from the disk\n", infile);
+  dl_error("Failed to restore graph %s from the disk\n", infile);
   fclose(fpin);
   gk_rmpath(infile);
   // graph->ondisk = 0;
@@ -335,8 +337,7 @@ void async_dump_to_disk(ctrl_type *ctrl, graph_type *graph) {
   // create thread to run `launch_dump()`
   int ret = pthread_create(&pid, NULL, &launch_dump, (void *)t);
   if (ret) {
-    fprintf(stderr, "pthread_create for async dump to disk failed.\n");
-    exit(1);
+    dl_error("pthread_create for async dump to disk failed.\n");
   }
 
   graph->io_pid = pid;
@@ -367,8 +368,7 @@ void async_read_from_disk(ctrl_type *ctrl, graph_type *graph) {
   asyncio_task *t = get_async_task(ctrl, graph);
   int ret = pthread_create(&pid, NULL, &launch_read, (void *)t);
   if (ret) {
-    fprintf(stderr, "pthread_create for async read from disk failed.\n");
-    exit(1);
+    dl_error("pthread_create for async read from disk failed.\n");
   }
 
   graph->io_pid = pid;
@@ -409,8 +409,7 @@ void async_cmd(char *line) {
 
   int ret = pthread_create(&pid, NULL, (void *)&launch_cmd, (void *)new_str);
   if (ret) {
-    fprintf(stderr, "pthread_create for async command failed. requested cmd: \"%s\"\n", new_str);
-    exit(1);
+    dl_error("pthread_create for async command failed. requested cmd: \"%s\"\n", new_str);
   }
 
   // make the thread self-destruct after the job is done

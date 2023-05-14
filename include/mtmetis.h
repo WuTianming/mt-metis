@@ -371,6 +371,7 @@ int MTMETIS_ComputeVertexSeparator(
  * tupe of operation to perform.
  *
  * @param nvtxs The number of vertices in the graph.
+ * @param ncon The number of weights per vertex.
  * @param xadj The adjacency list pointer.
  * @param adjncy The adjacency list.
  * @param vwgt The vertex weights.
@@ -384,6 +385,7 @@ int MTMETIS_ComputeVertexSeparator(
  */
 int mtmetis_partition_explicit(
     mtmetis_vtx_type nvtxs,
+    int ncon,
     mtmetis_adj_type const * xadj,
     mtmetis_vtx_type const * adjncy,
     int is_mmaped,

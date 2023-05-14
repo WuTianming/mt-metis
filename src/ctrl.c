@@ -33,7 +33,7 @@ static size_t const DEFAULT_ADJCHUNKSIZE = -1;
 // static size_t const DEFAULT_ADJCHUNKSIZE = (1llu << 30);  // 1 gig edges -- for papers100M
 // static size_t const DEFAULT_ADJCHUNKSIZE = 5155000;  // products corner case
 // static size_t const DEFAULT_ADJCHUNKSIZE = 1600000;
-// static size_t const DEFAULT_ADJCHUNKSIZE = 160000;
+// static size_t const DEFAULT_ADJCHUNKSIZE = 80000;    // arxiv chunk size
 static size_t const DEFAULT_NCUTS = 1; 
 static size_t const DEFAULT_NRUNS = 1; 
 static size_t const DEFAULT_NREFPASS = 8;
@@ -253,8 +253,10 @@ void ctrl_setup(
       ctrl->coarsen_to = 200;
       break;
     case MTMETIS_PTYPE_KWAY:
-      // ctrl->coarsen_to = dl_max(nvtxs/(20*pid_uplog2(nparts)),30*nparts);
-      ctrl->coarsen_to = 100*nparts;    // make sure initpart only needs to handle small graphs, reducing memory usage
+      // the original `coarsen_to` parameter:
+      // ctrl->coarsen_to = dl_max(nvtxs/(20*pid_uplog2(nparts)),1000*nparts);
+
+      ctrl->coarsen_to = 1000*nparts;    // make sure initpart only needs to handle small graphs, reducing memory usage
       printf(">>> coarsen_to = %"PF_VTX_T"; ratio = %lf\n", ctrl->coarsen_to, (double)(20*pid_uplog2(nparts)));
       break;
     case MTMETIS_PTYPE_ND:

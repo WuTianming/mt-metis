@@ -34,6 +34,7 @@
 typedef struct arg_type {
   ctrl_type * ctrl;
   vtx_type nvtxs;
+  vtx_type ncon;
   adj_type const * xadj;
   vtx_type const * adjncy;
   wgt_type const * vwgt;
@@ -92,7 +93,7 @@ static void S_launch_func(
   /* distribute graph */
   // graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->xadj, \
   //     arg->adjncy,arg->vwgt,arg->adjwgt,ctrl->comm);
-  graph = par_graph_distribute(ctrl->dist,arg->nvtxs,ctrl->adjchunksize,arg->xadj, \
+  graph = par_graph_distribute(ctrl->dist,arg->nvtxs,arg->ncon,ctrl->adjchunksize,arg->xadj, \
       arg->adjncy,arg->is_mmaped,arg->vwgt,arg->adjwgt,ctrl->comm);
 
   // optimization:
@@ -224,6 +225,7 @@ double * mtmetis_init_options(void)
 
 int mtmetis_partition_explicit(
     vtx_type const nvtxs,
+    int ncon,
     adj_type const * const xadj,
     vtx_type const * const adjncy,
     int is_mmaped,
@@ -244,6 +246,7 @@ int mtmetis_partition_explicit(
   }
   
   ctrl_setup(ctrl,NULL,nvtxs);
+  ctrl->maxvwgt = wgt_alloc(ncon);
 
   timers = &(ctrl->timers);
 
@@ -272,6 +275,7 @@ int mtmetis_partition_explicit(
 
   arg.ctrl = ctrl;
   arg.nvtxs = nvtxs;
+  arg.ncon = ncon;
   arg.xadj = xadj;
   arg.adjncy = adjncy;
   arg.is_mmaped = is_mmaped;
@@ -375,7 +379,7 @@ int MTMETIS_PartGraphRecursive(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_RB;
   modopts[MTMETIS_OPTION_NPARTS] = *nparts;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,adjwgt,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,*ncon,xadj,adjncy,0,vwgt,adjwgt,modopts, \
       where,r_edgecut);
 
   dl_free(modopts);
@@ -407,7 +411,7 @@ int MTMETIS_PartGraphKway(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_KWAY;
   modopts[MTMETIS_OPTION_NPARTS] = *nparts;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,adjwgt,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,*ncon,xadj,adjncy,0,vwgt,adjwgt,modopts, \
       where,r_edgecut);
 
   dl_free(modopts);
@@ -438,7 +442,7 @@ int MTMETIS_NodeND(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_ND;
   modopts[MTMETIS_OPTION_NPARTS] = 3;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,NULL,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,1,xadj,adjncy,0,vwgt,NULL,modopts, \
       iperm,NULL);
 
   /* generate the inverse permutation */
@@ -471,7 +475,7 @@ int MTMETIS_ComputeVertexSeparator(
   modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_VSEP;
   modopts[MTMETIS_OPTION_NPARTS] = 3;
 
-  rv = mtmetis_partition_explicit(*nvtxs,xadj,adjncy,0,vwgt,NULL,modopts, \
+  rv = mtmetis_partition_explicit(*nvtxs,1,xadj,adjncy,0,vwgt,NULL,modopts, \
       where, sepsize);
 
   dl_free(modopts);

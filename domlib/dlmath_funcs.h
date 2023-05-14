@@ -87,6 +87,20 @@ DLMATH_VISIBILITY DLMATH_TYPE_T DLMATH_PUB(sum)(
   return sum;
 }
 
+DLMATH_VISIBILITY DLMATH_TYPE_T DLMATH_PUB(sum_step)(
+    DLMATH_TYPE_T const * const ptr, 
+    size_t const n,
+    size_t const step)
+{
+  size_t i;
+  DLMATH_TYPE_T sum = 0;
+
+  for (i=0;i<n;i+=step) {
+    sum += ptr[i];
+  }
+  return sum;
+}
+
 
 DLMATH_VISIBILITY DLMATH_TYPE_T DLMATH_PUB(product)(
     DLMATH_TYPE_T const * const ptr, 

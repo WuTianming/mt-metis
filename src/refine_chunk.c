@@ -53,6 +53,7 @@ static void S_partparams_kway(
   tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
 
   pid_type const nparts = ctrl->nparts;
+  int const ncon = graph->ncon;
 
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
   vtx_type const * const * const gadjncy = (vtx_type const **)graph->adjncy;
@@ -80,7 +81,7 @@ static void S_partparams_kway(
 
   gpwgts = dlthread_get_shmem(sizeof(wgt_type*)*nthreads,ctrl->comm);
 
-  mypwgts = gpwgts[myid] = wgt_init_alloc(0,nparts);
+  mypwgts = gpwgts[myid] = wgt_init_alloc(0,nparts*ncon);
 
   /* reset the size of neighbor infor array */
   kwinfo = graph->kwinfo + myid; 
@@ -93,18 +94,24 @@ static void S_partparams_kway(
 
   /* calculate partition weights */
   for (i=0;i<mynvtxs;++i) {
-    mypwgts[where[i]] += vwgt[i];
+    for (int j=0; j<ncon; ++j)
+      mypwgts[where[i]*ncon+j] += vwgt[i*ncon+j];
+    // mypwgts[where[i]] += vwgt[i];
   }
   dlthread_barrier(ctrl->comm);
 
   if (myid == 0) {
     /* someday I need to parallelize this via dlthreads */
     for (i=0; i<nparts;++i) {
-      k = 0;
-      for (j=0; j<nthreads;++j) {
-        k += gpwgts[j][i];
+      for (k=0; k<ncon; ++k) {
+        // printf("refine_chunk.c line %d: ", __LINE__);
+        pwgts[i*ncon+k] = 0;
+        for (j=0; j<nthreads;++j) {
+          pwgts[i*ncon+k] += gpwgts[j][i*ncon+k];
+          // printf("%"PF_WGT_T" ", gpwgts[j][i*ncon+k]);
+        }
+        // printf("\n");
       }
-      pwgts[i] = k;
     }
   }
 

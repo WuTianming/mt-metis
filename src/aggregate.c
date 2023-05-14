@@ -852,8 +852,9 @@ static vtx_type S_coarsen_match_leaves(
     vtx_type cnvtxs,
     vtx_type const leafdegree) 
 {
-  // exit(1);    // keep match_leaves flag off for now
+  exit(1);    // keep match_leaves flag off for now
 
+#if 0
   vtx_type i, k, m, l, npivot, mask;
   adj_type j, jj;
   vtx_type * ind, * hash, * id;
@@ -957,6 +958,7 @@ static vtx_type S_coarsen_match_leaves(
   dl_free(ind);
 
   return cnvtxs;
+#endif
 }
 
 
@@ -985,6 +987,10 @@ static vtx_type S_coarsen_match_twins(
     vtx_type cnvtxs,
     vtx_type const maxdeg)
 {
+  // need to change vwgt to ncon array
+  exit(1);
+
+#if 0
   uint64_t h;
   vtx_type i, v, u, k, deg, l, ntwin;
   adj_type j;
@@ -1107,6 +1113,7 @@ static vtx_type S_coarsen_match_twins(
   dl_free(listb);
 
   return cnvtxs;
+#endif
 }
 
 int island_cheat = 0;
@@ -1143,7 +1150,8 @@ static vtx_type S_coarsen_match_RM(
   vtx_type * const * const gadjncy = (vtx_type **)graph->adjncy;
   vtx_type ** const gcmap = graph->cmap;
 
-  wgt_type const maxvwgt = ctrl->maxvwgt;
+  wgt_type const * const maxvwgt = ctrl->maxvwgt;
+  int ncon = graph->ncon;
 
   /* local graph pointers */
   vtx_type const mynvtxs = graph->mynvtxs[myid];
@@ -1216,8 +1224,16 @@ static vtx_type S_coarsen_match_RM(
       if (match[i] == NULL_VTX) { /* Unmatched */
         gvtx = lvtx_to_gvtx(i,myid,graph->dist);
         maxidx = gvtx;
+
+        int overweight = 0;
+        for (int t = 0; t < ncon; ++t) {
+          if (vwgt[ncon*i+t] > maxvwgt[t]) {
+            overweight = 1;
+            break;
+          }
+        }
         
-        if (vwgt[i] < maxvwgt) {
+        if (!overweight) {
           /* Deal with island vertices. Match locally */
           if (xadj[i+1] == xadj[i] || (island_cheat == 1 && (xadj[i+1]-xadj[i] < 100))) { 
             last_unmatched = dl_max(pi, last_unmatched)+1;
@@ -1242,7 +1258,14 @@ static vtx_type S_coarsen_match_RM(
                 nbrid = gvtx_to_tid(k,graph->dist);
                 lvtx = gvtx_to_lvtx(k,graph->dist);
               }
-              if (vwgt[i]+gvwgt[nbrid][lvtx] <= maxvwgt && 
+              int newnode_overweight = 0;
+              for (int t = 0; t < ncon; ++t) {
+                if (vwgt[i*ncon+t]+gvwgt[nbrid][lvtx*ncon+t] > maxvwgt[t]) {
+                  newnode_overweight = 1;
+                  break;
+                }
+              }
+              if (!newnode_overweight && 
                   (gmatch[nbrid][lvtx] == NULL_VTX)) {
                 maxidx = k;
                 break;
@@ -1253,7 +1276,8 @@ static vtx_type S_coarsen_match_RM(
               }
             } while (j != start);
           }
-        }
+        } // end if (!overweight)
+
         if (maxidx < mynvtxs) {
           match[i] = maxidx;
           match[maxidx] = i;
@@ -1310,7 +1334,8 @@ static vtx_type S_coarsen_match_SHEM(
   unsigned int seed;
   vtx_type cnvtxs, i, pi, k, maxidx, last_unmatched, \
       lvtx, gvtx;
-  wgt_type mywgt, ewgt, maxwgt;
+  wgt_type ewgt, maxwgt;
+  wgt_type const * mywgt;
   tid_type nbrid;
   adj_type j, avgdegree;
   vtx_type * perm, * tperm, * degrees;
@@ -1319,7 +1344,8 @@ static vtx_type S_coarsen_match_SHEM(
 
   vtx_type ** const gcmap = graph->cmap;
 
-  wgt_type const maxvwgt  = ctrl->maxvwgt;
+  wgt_type const * const maxvwgt = ctrl->maxvwgt;
+  int ncon = graph->ncon;
 
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const **)graph->xadj;
@@ -1473,12 +1499,20 @@ static vtx_type S_coarsen_match_SHEM(
       if (match[i] != NULL_VTX) { continue; }
 
       /* Unmatched */
-      mywgt = vwgt[i];
+      mywgt = vwgt + i*ncon;
       maxwgt = 0;
       gvtx = lvtx_to_gvtx(i,myid,graph->dist);
       maxidx = gvtx;
 
-      if (mywgt < maxvwgt) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
+      int overweight = 0;
+      for (int t = 0; t < ncon; ++t) {
+        if (mywgt[t] >= maxvwgt[t]) {
+          overweight = 1;
+          break;
+        }
+      }
+
+      if (!overweight) {    // 这个节点仍然可以参与更多的合并，而不会变得 overweight
         if (xadj[i+1] == xadj[i]) { 
           /* Deal with island vertices. Find a non-island and match it with. 
               The matching ignores ctrl->maxvwgt requirements */
@@ -1503,8 +1537,16 @@ static vtx_type S_coarsen_match_SHEM(
               lvtx = gvtx_to_lvtx(k,graph->dist);
             }
 
+            int newnode_overweight = 0;
+            for (int t = 0; t < ncon; ++t) {
+              if (mywgt[t] + gvwgt[nbrid][lvtx*ncon+t] >= maxvwgt[t]) {
+                newnode_overweight = 1;
+                break;
+              }
+            }
+
             if (maxwgt < ewgt + (wgt_type)((pi+xadj[i])%2) && \
-                mywgt+gvwgt[nbrid][lvtx] <= maxvwgt && \
+                !newnode_overweight && \
                 gmatch[nbrid][lvtx] == NULL_VTX) {
               maxidx = k;
               maxwgt = ewgt;
@@ -1571,6 +1613,7 @@ static vtx_type S_coarsen_cluster_FC(
 {
   exit(1);
 
+#if 0
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1778,6 +1821,7 @@ static vtx_type S_coarsen_cluster_FC(
   }
 
   return mycnvtxs;
+#endif
 }
 
 
@@ -1800,6 +1844,7 @@ static vtx_type S_coarsen_cluster_RC(
 {
   exit(1);
 
+#if 0
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1959,6 +2004,7 @@ static vtx_type S_coarsen_cluster_RC(
   }
 
   return mycnvtxs;
+#endif
 }
 
 

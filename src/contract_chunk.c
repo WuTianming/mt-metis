@@ -145,6 +145,10 @@ static void S_par_contract_DENSE(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  if (graph->ncon > 1) {
+    dl_error("Dense contraction only works for 1-constrained graphs for now\n");
+  }
+
   adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -328,6 +332,8 @@ static void S_par_contract_CLS_quadratic(
     vtx_type const * const * const gmatch, 
     vtx_type const * const fcmap)
 {
+  int ncon = graph->ncon;
+
   adj_type cnedges, l, maxdeg, j, i, jj, start;
   tid_type o, t;
   vtx_type v, c, cg, k;
@@ -510,7 +516,10 @@ static void S_par_contract_CLS_quadratic(
       for (;c<mycnvtxs;++c) {
         cg = lvtx_to_gvtx(c,myid,cdist);
         /* initialize the coarse vertex */
-        mycvwgt[c] = 0;
+        for (t = 0; t < ncon; ++t) {
+          mycvwgt[c * ncon + t] = 0;
+        }
+        // mycvwgt[c] = 0;
 
         v = fcmap[c];       // this is guaranteed to be thread local!
         if (v >= cc1end) {  // I'm done with the cc1 chunk
@@ -562,7 +571,11 @@ static void S_par_contract_CLS_quadratic(
           wgt_type const * const padjwgt = (ttt==1 ? local_adjwgt - cc1adjstart : gadjwgt[o] - gxadj[o][gchunkofst[o][cc2]]);
 
           /* transfer over vertex stuff from v and u */
-          mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+          // mycvwgt[c] += graph->uniformvwgt ? 1 : gvwgt[o][v];
+          for (t = 0; t < ncon; ++t) {
+            mycvwgt[c * ncon + t] += gvwgt[o][v * ncon + t];
+          }
+          // FIXME: ncon
 
           // (o,v) -j-> (t,k)
           // explore other coarse vertices that current coarse vertex is connected to

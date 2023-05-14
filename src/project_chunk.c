@@ -36,6 +36,8 @@ static void S_project_kway(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  int ncon = graph->ncon;
+
   vtx_type i, k, pi, lvtx, nbrid;
   adj_type j, l, istart, iend;
   pid_type mepart, otherpart, na;
@@ -72,7 +74,7 @@ static void S_project_kway(
   dlthread_barrier(ctrl->comm);   // There was a race cond. in the original code
   
   if (myid == 0) {
-    wgt_copy(graph->pwgts,cgraph->pwgts,nparts);
+    wgt_copy(graph->pwgts,cgraph->pwgts,nparts*ncon);
 
     /* migrate old kwinfo */
     graph->kwinfo = gkwinfo;
