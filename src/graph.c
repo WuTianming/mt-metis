@@ -1794,7 +1794,6 @@ graph_type * graph_setup_coarse(
   graph_calc_dist(vtx_max_value(cgraph->mynvtxs,nthreads),nthreads, \
       &cgraph->dist);
 
-  // FIXME: need to change tvwgt into array
   cgraph->ncon = ncon;
   cgraph->tvwgt = malloc(sizeof(twgt_type)*ncon);
   cgraph->invtvwgt = malloc(sizeof(real_type)*ncon);
@@ -1973,7 +1972,6 @@ void graph_free_rdata(
   }
 }
 
-// TODO: this function needs to be thoroughly understood
 double graph_imbalance(
     graph_type const * const graph,
     pid_type const nparts,
@@ -1983,19 +1981,6 @@ double graph_imbalance(
   double max, cur;
 
   for (int t = 0; t < ncon; ++t) {
-    // wgt_type tmp = wgt_lsum(graph->pwgts,nparts);
-    printf("graph.c line 1988, constraint #%d: ", t);
-    for (int i = 0; i < nparts; ++i) {
-      printf("%"PF_TWGT_T" ", graph->pwgts[i*ncon+t]);
-    }
-    printf("\n");
-  }
-  for (int t = 0; t < ncon; ++t) {
-    // wgt_type tmp = wgt_lsum(graph->pwgts,nparts);
-    for (int i = 0; i < nparts; ++i) {
-      printf("%"PF_TWGT_T" ", graph->pwgts[i*ncon+t]);
-    }
-    printf("\n");
     wgt_type tmp = wgt_sum_step(graph->pwgts+t,nparts*ncon,ncon);
     DL_ASSERT_EQUALS(tmp,graph->tvwgt[t],"%"PF_TWGT_T);
   }
@@ -2028,7 +2013,6 @@ double graph_imbalance_diff(
   for (i=0;i<ncon;++i) {
     DL_ASSERT_EQUALS(wgt_sum_step(graph->pwgts+i,nparts*ncon,ncon),graph->tvwgt[i],"%"PF_TWGT_T);
   }
-  // DL_ASSERT_EQUALS(wgt_lsum(graph->pwgts,nparts),graph->tvwgt[0],"%"PF_TWGT_T);
 
   max = -1.0;
   for (i=0; i<ncon; i++) {
@@ -2038,15 +2022,6 @@ double graph_imbalance_diff(
         max = cur;
     }
   }
-
-  // max = 0;
-
-  // for (k =0;k<nparts;++k) {
-  //   cur = graph->pwgts[k]*pijbm[k]-ubfactor;
-  //   if (cur > max) {
-  //     max = cur;
-  //   }
-  // }
 
   return max;
 }
@@ -2277,8 +2252,6 @@ graph_type * par_graph_setup(
     wgt_type * const adjwgt,
     dlthread_comm_t const comm)
 {
-  fprintf(stderr, "%d: ncon = %d\n", __LINE__, ncon);
-
   wgt_type asum, *vsum;
   vsum = malloc(sizeof(wgt_type)*ncon);
   graph_type * graph;
@@ -2355,7 +2328,6 @@ void par_graph_setup_twgts(
   vtx_type i;
   adj_type j;
   twgt_type * vsum, asum;
-  fprintf(stderr, "ncon = %d\n", graph->ncon);
   vsum = malloc(sizeof(twgt_type)*graph->ncon);
 
   tid_type const myid = dlthread_get_id(graph->comm);
@@ -2364,15 +2336,17 @@ void par_graph_setup_twgts(
     for (i=0;i<graph->ncon;++i)
       vsum[i] = graph->nvtxs;
   } else {
-    for (int t=0;t<graph->ncon;++t) {
-      vsum[t] = 0;
-      for (i=0;i<graph->mynvtxs[myid];++i) {
-        vsum[t] += graph->vwgt[myid][i*graph->ncon+t];
-      }
-      vsum[t] = twgt_dlthread_sumreduce(vsum[t],graph->comm);
-      if (myid == 0) {
-        graph->tvwgt[t] = vsum[t];
-        graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
+    if (graph->finer == NULL) {
+      for (int t=0;t<graph->ncon;++t) {
+        vsum[t] = 0;
+        for (i=0;i<graph->mynvtxs[myid];++i) {
+          vsum[t] += graph->vwgt[myid][i*graph->ncon+t];
+        }
+        vsum[t] = twgt_dlthread_sumreduce(vsum[t],graph->comm);
+        if (myid == 0) {
+          graph->tvwgt[t] = vsum[t];
+          graph->invtvwgt[t] = 1.0/(graph->tvwgt[t] > 0 ? graph->tvwgt[t] : 1);
+        }
       }
     }
   }
@@ -2398,21 +2372,30 @@ void par_chunk_graph_setup_twgts(
     graph_type * const graph,
     twgt_type asum)
 {
+  int ncon = graph->ncon;
+
   vtx_type i;
   adj_type j;
   twgt_type * vsum;
-  vsum = malloc(sizeof(twgt_type)*graph->ncon);
 
   tid_type const myid = dlthread_get_id(graph->comm);
 
+// chunk_graph_setup_twgts is called after a chunk-contraction
+// chunk-contraction means that there is already a parent graph,
+// hence the tvwgt is already inherited from the parent graph,
+// so skip re-calculation.
+// this is different from par_graph_setup_twgts, which is called
+// for the initial distribution
+#if 0
+  vsum = malloc(sizeof(twgt_type)*graph->ncon);
   if (graph->uniformvwgt) {
-    for (i=0;i<graph->ncon;++i)
+    for (i=0;i<ncon;++i)
       vsum[i] = graph->nvtxs;
   } else {
-    for (int t=0;t<graph->ncon;++t) {
+    for (int t=0;t<ncon;++t) {
       vsum[t] = 0;
       for (i=0;i<graph->mynvtxs[myid];++i) {
-        vsum[t] += graph->vwgt[myid][i];
+        vsum[t] += graph->vwgt[myid][i*ncon+t];
       }
       vsum[t] = twgt_dlthread_sumreduce(vsum[t],graph->comm);
       if (myid == 0) {
@@ -2422,6 +2405,7 @@ void par_chunk_graph_setup_twgts(
     }
   }
   free(vsum);
+#endif
 
   asum = twgt_dlthread_sumreduce(asum,graph->comm);
   if (myid == 0) {
@@ -3658,11 +3642,8 @@ graph_type * par_graph_distribute(
     wgt_type const * const adjwgt,
     dlthread_comm_t const comm)
 {
-  printf("%d ncon = %d\n", __LINE__, ncon);
-  assert(ncon >= 1);
   if (ncon == 0)
-    ncon = 1;     // will be automatically set to uniform vwgt
-  printf("%d ncon = %d\n", __LINE__, ncon);
+    dl_error("graph has no vertex weights: this should be taken care of in the beginning\n");
   vtx_type i, k, v, mynvtxs, lvtx;
   adj_type j, l;
   tid_type nbrid;

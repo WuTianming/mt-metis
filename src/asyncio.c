@@ -34,7 +34,6 @@ static void S_ser_write_to_disk(
   ncon   = graph->ncon;     // now supports multiple constraints!
 
   {
-    // FIXME: re-allocate when attempting to read back
     for (int myid = 0; myid < nthreads; ++myid) {
       if (!graph->free_adjncy) {
         dl_free(graph->adjncy[myid]);

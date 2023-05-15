@@ -400,6 +400,41 @@ static inline void S_par_sync_pwgts(
 * REFINEMENT FUNCTIONS ********************************************************
 ******************************************************************************/
 
+// this function is adapted from serial METIS
+static int IsHBalanceBetterTT(int ncon, const wgt_type *pt1, const wgt_type *pt2, const wgt_type *nvwgt, double ubf)
+{
+  int i;
+  double m11=0.0, m12=0.0, m21=0.0, m22=0.0, sm1=0.0, sm2=0.0, temp;
+
+  for (i=0; i<ncon; i++) {
+    temp = (pt1[i]+nvwgt[i])/ubf;
+    if (m11 < temp) {
+      m12 = m11;
+      m11 = temp;
+    }
+    else if (m12 < temp)
+      m12 = temp;
+    sm1 += temp;
+    temp = (pt2[i]+nvwgt[i])/ubf;
+    if (m21 < temp) {
+      m22 = m21;
+      m21 = temp;
+    }
+    else if (m22 < temp)
+      m22 = temp;
+    sm2 += temp;
+  }
+  if (m21 < m11)
+    return 1;
+  if (m21 > m11)
+    return 0;
+  if (m22 < m12)
+    return 1;
+  if (m22 > m12)
+    return 0;
+
+  return sm2 < sm1;
+}
 
 static vtx_type S_par_kwayrefine_GREEDY(
     ctrl_type * const ctrl, 
@@ -490,6 +525,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   vtx_incset(cperm, 0, 1, maxchunkcnt);
 
   for (pass=0; pass<niter; pass++) {
+    int total_improvement_for_all_chunks = 0;
+
     // shuffle chunk order every time
     unsigned seed = ctrl->seed + myid;
     vtx_shuffle_r(cperm, graph->chunkcnt[myid], &seed);
@@ -557,6 +594,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (myrinfo->id > 0) {
               int give_up = 0;
               for (int t=0; t<ncon; ++t) {
+                // if moving this vertex AWAY FROM the current partition will
+                // result in an underweighted partition, give up
                 if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                   give_up = 1;
                   break;
@@ -576,6 +615,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
               
               int overweight = 0;
               for (int t=0; t<ncon; ++t) {
+                // if moving this vertex INTO the new partition will result in
+                // an overweighted partition, give up
                 if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                   overweight = 1;
                   break;
@@ -606,20 +647,31 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
                 int overweight = 0;
                 for (int t=0; t<ncon; ++t) {
+                  // if moving this vertex INTO the new partition will result in
+                  // an overweighted partition, give up
                   if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                     overweight = 1;
                     break;
                   }
                 }
 
+                int morebalanced = IsHBalanceBetterTT(
+                    ncon, lpwgts + from * ncon, lpwgts + to * ncon, myvwgt,
+                    ctrl->ubfactor);
+
+                // original expression:
+                // tpwgts[mynbrs[k].pid]*lpwgts[to] < \
+                //       tpwgts[to]*lpwgts[mynbrs[k].pid]
+
+                // if ((gain > 0 && !overweight) \
+                //     || (mynbrs[j].ed == mynbrs[k].ed && \
+                //       morebalanced)) {
                 if ((gain > 0 && !overweight) \
-                    || (mynbrs[j].ed == mynbrs[k].ed && \
-                      tpwgts[mynbrs[k].pid]*lpwgts[to] < \
-                      tpwgts[to]*lpwgts[mynbrs[k].pid])) {
+                    || (gain >= 0 && morebalanced)) {
                   k = j;
                 }
               }
-            }
+            } // end for: find a better one than the first eligible one
             to = mynbrs[k].pid;
 
             if (mynbrs[k].ed >= myrinfo->id) { 
@@ -632,6 +684,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
                   break;
                 }
               }
+              if (!overweight1)
               for (int t=0; t<ncon; ++t) {
                 if (tpwgts[to]*lpwgts[from*ncon+t] > \
                     tpwgts[from]*(lpwgts[to*ncon+t]+myvwgt[t])) {
@@ -640,33 +693,38 @@ static vtx_type S_par_kwayrefine_GREEDY(
                 }
               }
 
-              if (!(gain > 0 || (gain == 0 \
-                        && (overweight1 || overweight2)))) {
-                continue;
-              }
+              // if (!(gain > 0 || (gain == 0 \
+              //           && (overweight1 || overweight2)))) {
+              //   continue;
+              // }
             }
 
             int overweight = 0;
             int underweight = 0;
 
             for (int t=0; t<ncon; ++t) {
+              // if moving this vertex INTO the new partition will result in
+              // an overweighted partition, give up
               if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                 overweight = 1;
                 break;
               }
             }
 
+            if (!overweight)
             for (int t=0; t<ncon; ++t) {
+              // if moving this vertex AWAY FROM the current partition will result in
+              // an underweighted partition, give up
               if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                 underweight = 1;
                 break;
               }
             }
 
-            if (overweight || underweight) {
-              /* whatever you do, don't push the red button */
-              continue;
-            }
+            // if (overweight || underweight) {
+            //   /* whatever you do, don't push the red button */
+            //   continue;
+            // }
 
             /* make the move ***************************************************/
             ++nmoved;
@@ -696,12 +754,20 @@ static vtx_type S_par_kwayrefine_GREEDY(
         no_improvement = 0;
       }
 
+      total_improvement_for_all_chunks += mycut;
+
       if (myid == 0) {
         graph->mincut -= (mycut/2);
       }
     } /* end chunks */
 
+    dlthread_barrier(ctrl->comm);
+
     if (no_improvement) {
+      break;
+    }
+
+    if (total_improvement_for_all_chunks * 200 < graph->mincut) {
       break;
     }
   } /* end passes */

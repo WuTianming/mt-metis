@@ -188,7 +188,9 @@ static const cmd_opt_t OPTS[] = {
   {MTMETIS_OPTION_REMOVEISLANDS,'I',"removeislands","Remove island vertices " \
       "before partitioning (default=false).",CMD_OPT_BOOL,NULL,0},
   {MTMETIS_OPTION_VWGTDEGREE,'V',"vwgtdegree","Use the degree of each " \
-      "vertex as its weight (default=false).",CMD_OPT_FLAG,NULL,0},
+      "vertex as an *extra* constraint (default=false).",CMD_OPT_FLAG,NULL,0},
+  {MTMETIS_OPTION_VWGTONE,'1',"vwgtone","Use 1 as an *extra* vertex weight " \
+      "(default=false).",CMD_OPT_FLAG,NULL,0},
   {MTMETIS_OPTION_IGNORE,'W',"ignoreweights","Ignore input weights " \
       "on a graph file (default=none).",CMD_OPT_CHOICE,IGNOREWEIGHTS_CHOICES, \
       S_ARRAY_SIZE(IGNOREWEIGHTS_CHOICES)},
@@ -383,6 +385,7 @@ void count_total_deg_of_part(int argc, char ** argv) {
 
 int read_400M_dataset(
     vtx_type * const r_nvtxs,
+    int * const ncon,
     adj_type ** const r_xadj,
     vtx_type ** const r_adjncy,
     wgt_type ** const r_vwgt,
@@ -394,6 +397,8 @@ int read_400M_dataset(
   meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
   if (fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges) == EOF) return 0;
   fclose(meta);
+
+  *ncon = 0;
 
   printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
 
@@ -421,6 +426,7 @@ int read_400M_dataset(
 
 int read_400M_dataset_mmap(
     vtx_type * const r_nvtxs,
+    int * const ncon,
     adj_type ** const r_xadj,
     vtx_type ** const r_adjncy,
     wgt_type ** const r_vwgt,
@@ -433,6 +439,8 @@ int read_400M_dataset_mmap(
   meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
   fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges);
   fclose(meta);
+
+  *ncon = 0;
 
   printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
 
@@ -516,9 +524,9 @@ int main(
     // initiate xadj, adjncy, vwgt and adjwgt
     printf("Loading papers400M-sparse dataset...\n");
     if (is_mmaped)
-      rv = read_400M_dataset_mmap(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+      rv = read_400M_dataset_mmap(&nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt);
     else
-      rv = read_400M_dataset(&nvtxs, &xadj, &adjncy, &vwgt, &adjwgt);
+      rv = read_400M_dataset(&nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt);
   } else {
     /*
      * the vwgt array (vertex weights) is laid out as follows (example ncon=3):
@@ -560,14 +568,38 @@ int main(
   }
 
   if (options[MTMETIS_OPTION_VWGTDEGREE] != MTMETIS_VAL_OFF) {
-    ncon = 1;
-    if (vwgt) free(vwgt);
-    vwgt = wgt_alloc(nvtxs);
+    // the degree of each node is used as an *extra* constraint
+    wgt_type * new_vwgt = wgt_alloc(nvtxs * (ncon+1));
     for (i=0;i<nvtxs;++i) {
-      vwgt[i] = xadj[i+1] - xadj[i];
+      for (int j=0;j<ncon;++j) {
+        new_vwgt[i*(ncon+1)+j] = vwgt[i*ncon+j];
+      }
+      new_vwgt[i*(ncon+1)+ncon] = xadj[i+1] - xadj[i];
     }
-  } else if (ncon == 0) {
+    if (vwgt) free(vwgt);
+    vwgt = new_vwgt;
+    ncon++;
+  }
+
+  if (options[MTMETIS_OPTION_VWGTONE] != MTMETIS_VAL_OFF) {
+    // the degree of each node is used as an *extra* constraint
+    wgt_type * new_vwgt = wgt_alloc(nvtxs * (ncon+1));
+    for (i=0;i<nvtxs;++i) {
+      for (int j=0;j<ncon;++j) {
+        new_vwgt[i*(ncon+1)+j] = vwgt[i*ncon+j];
+      }
+      new_vwgt[i*(ncon+1)+ncon] = 1;
+    }
+    if (vwgt) free(vwgt);
+    vwgt = new_vwgt;
+    ncon++;
+  }
+
+  // after all the modification on constraints, we still have no constraints
+  if (ncon == 0) {
     ncon = 1;
+    // remove everything so that the code below will treat it as uniform vertex
+    // weights
     if (vwgt) { free(vwgt); vwgt = NULL; }
     // vwgt = wgt_init_alloc(1, nvtxs);
   }
