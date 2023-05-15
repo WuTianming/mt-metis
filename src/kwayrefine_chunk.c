@@ -474,7 +474,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   kwnbrinfo_type * const nbrinfo = kwinfo->nbrinfo;
   pid_type * const where = gwhere[myid];
 
-  // the balance factors `tpwgts` are the same for all constraints for now, hence the vector length being `nparts` instead of `nparts * ncon`
+  // the balance factors `tpwgts` are the same for all constraints for now,
+  // hence the vector length being `nparts` instead of `nparts * ncon`
   real_type const * const tpwgts = ctrl->tpwgts;
 
   combuffer = update_combuffer_create(graph->mynedges[myid],ctrl->comm);
@@ -493,9 +494,16 @@ static vtx_type S_par_kwayrefine_GREEDY(
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
     for (int t = 0; t < ncon; ++t) {
-      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ctrl->ubfactor;
-      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ctrl->ubfactor);
+      // real_type ubf = (t >= 1 ? 1.2 : ctrl->ubfactor);
+      real_type ubf = ctrl->ubfactor;
+      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ubf;
+      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ubf);
     }
+  }
+  if (myid == 0)
+  for (int t = 0; t < ncon; ++t) {
+    // print the max/min partition weights
+    printf("maxwgt[%d] = %"PF_WGT_T", minwgt[%d] = %"PF_WGT_T"\n", t, maxwgt[t], t, minwgt[t]);
   }
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
@@ -525,7 +533,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
   vtx_incset(cperm, 0, 1, maxchunkcnt);
 
   for (pass=0; pass<niter; pass++) {
-    int total_improvement_for_all_chunks = 0;
+    wgt_type total_improvement_for_all_chunks = 0;
 
     // shuffle chunk order every time
     unsigned seed = ctrl->seed + myid;
@@ -594,6 +602,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (myrinfo->id > 0) {
               int give_up = 0;
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 // if moving this vertex AWAY FROM the current partition will
                 // result in an underweighted partition, give up
                 if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
@@ -615,6 +624,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
               
               int overweight = 0;
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 // if moving this vertex INTO the new partition will result in
                 // an overweighted partition, give up
                 if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
@@ -647,6 +657,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
                 int overweight = 0;
                 for (int t=0; t<ncon; ++t) {
+                // for (int t=0; t<1; ++t) {
                   // if moving this vertex INTO the new partition will result in
                   // an overweighted partition, give up
                   if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
@@ -663,13 +674,16 @@ static vtx_type S_par_kwayrefine_GREEDY(
                 // tpwgts[mynbrs[k].pid]*lpwgts[to] < \
                 //       tpwgts[to]*lpwgts[mynbrs[k].pid]
 
-                // if ((gain > 0 && !overweight) \
-                //     || (mynbrs[j].ed == mynbrs[k].ed && \
-                //       morebalanced)) {
                 if ((gain > 0 && !overweight) \
-                    || (gain >= 0 && morebalanced)) {
+                    || (mynbrs[j].ed == mynbrs[k].ed && \
+                      morebalanced)) {
                   k = j;
                 }
+                // if ((gain > 0 && !overweight) \
+                //     || (gain >= 0 && morebalanced)) {
+                // if (gain >= 0 && morebalanced) {
+                //   k = j;
+                // }
               }
             } // end for: find a better one than the first eligible one
             to = mynbrs[k].pid;
@@ -679,6 +693,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
               int overweight1 = 0, overweight2 = 0;
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 if (lpwgts[from*ncon+t] >= maxwgt[from*ncon+t]) {
                   overweight1 = 1;
                   break;
@@ -686,6 +701,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
               }
               if (!overweight1)
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 if (tpwgts[to]*lpwgts[from*ncon+t] > \
                     tpwgts[from]*(lpwgts[to*ncon+t]+myvwgt[t])) {
                   overweight2 = 1;
@@ -693,16 +709,17 @@ static vtx_type S_par_kwayrefine_GREEDY(
                 }
               }
 
-              // if (!(gain > 0 || (gain == 0 \
-              //           && (overweight1 || overweight2)))) {
-              //   continue;
-              // }
+              if (!(gain > 0 || (gain == 0 \
+                        && (overweight1 || overweight2)))) {
+                continue;
+              }
             }
 
             int overweight = 0;
             int underweight = 0;
 
             for (int t=0; t<ncon; ++t) {
+            // for (int t=0; t<1; ++t) {
               // if moving this vertex INTO the new partition will result in
               // an overweighted partition, give up
               if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
@@ -713,6 +730,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
             if (!overweight)
             for (int t=0; t<ncon; ++t) {
+            // for (int t=0; t<1; ++t) {
               // if moving this vertex AWAY FROM the current partition will result in
               // an underweighted partition, give up
               if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
@@ -721,10 +739,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
               }
             }
 
-            // if (overweight || underweight) {
-            //   /* whatever you do, don't push the red button */
-            //   continue;
-            // }
+            if (overweight || underweight) {
+              /* whatever you do, don't push the red button */
+              continue;
+            }
 
             /* make the move ***************************************************/
             ++nmoved;
@@ -767,7 +785,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
       break;
     }
 
-    if (total_improvement_for_all_chunks * 200 < graph->mincut) {
+    if (total_improvement_for_all_chunks * 2000 < graph->mincut) {
       break;
     }
   } /* end passes */
