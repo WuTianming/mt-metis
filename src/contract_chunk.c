@@ -575,7 +575,6 @@ static void S_par_contract_CLS_quadratic(
           for (t = 0; t < ncon; ++t) {
             mycvwgt[c * ncon + t] += gvwgt[o][v * ncon + t];
           }
-          // FIXME: ncon
 
           // (o,v) -j-> (t,k)
           // explore other coarse vertices that current coarse vertex is connected to

@@ -400,6 +400,41 @@ static inline void S_par_sync_pwgts(
 * REFINEMENT FUNCTIONS ********************************************************
 ******************************************************************************/
 
+// this function is adapted from serial METIS
+static int IsHBalanceBetterTT(int ncon, const wgt_type *pt1, const wgt_type *pt2, const wgt_type *nvwgt, double ubf)
+{
+  int i;
+  double m11=0.0, m12=0.0, m21=0.0, m22=0.0, sm1=0.0, sm2=0.0, temp;
+
+  for (i=0; i<ncon; i++) {
+    temp = (pt1[i]+nvwgt[i])/ubf;
+    if (m11 < temp) {
+      m12 = m11;
+      m11 = temp;
+    }
+    else if (m12 < temp)
+      m12 = temp;
+    sm1 += temp;
+    temp = (pt2[i]+nvwgt[i])/ubf;
+    if (m21 < temp) {
+      m22 = m21;
+      m21 = temp;
+    }
+    else if (m22 < temp)
+      m22 = temp;
+    sm2 += temp;
+  }
+  if (m21 < m11)
+    return 1;
+  if (m21 > m11)
+    return 0;
+  if (m22 < m12)
+    return 1;
+  if (m22 > m12)
+    return 0;
+
+  return sm2 < sm1;
+}
 
 static vtx_type S_par_kwayrefine_GREEDY(
     ctrl_type * const ctrl, 
@@ -439,7 +474,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   kwnbrinfo_type * const nbrinfo = kwinfo->nbrinfo;
   pid_type * const where = gwhere[myid];
 
-  // the balance factors `tpwgts` are the same for all constraints for now, hence the vector length being `nparts` instead of `nparts * ncon`
+  // the balance factors `tpwgts` are the same for all constraints for now,
+  // hence the vector length being `nparts` instead of `nparts * ncon`
   real_type const * const tpwgts = ctrl->tpwgts;
 
   combuffer = update_combuffer_create(graph->mynedges[myid],ctrl->comm);
@@ -458,9 +494,17 @@ static vtx_type S_par_kwayrefine_GREEDY(
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
     for (int t = 0; t < ncon; ++t) {
-      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ctrl->ubfactor;
-      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ctrl->ubfactor);
+      // real_type ubf = (t >= 1 ? 1.1 : ctrl->ubfactor);
+      // real_type ubf = (t < 1 ? 1.1 : ctrl->ubfactor);
+      real_type ubf = ctrl->ubfactor;
+      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ubf;
+      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ubf);
     }
+  }
+  if (myid == 0)
+  for (int t = 0; t < ncon; ++t) {
+    // print the max/min partition weights
+    printf("maxwgt[%d] = %"PF_WGT_T", minwgt[%d] = %"PF_WGT_T"\n", t, maxwgt[t], t, minwgt[t]);
   }
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
@@ -490,6 +534,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   vtx_incset(cperm, 0, 1, maxchunkcnt);
 
   for (pass=0; pass<niter; pass++) {
+    wgt_type total_improvement_for_all_chunks = 0;
+
     // shuffle chunk order every time
     unsigned seed = ctrl->seed + myid;
     vtx_shuffle_r(cperm, graph->chunkcnt[myid], &seed);
@@ -557,7 +603,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (myrinfo->id > 0) {
               int give_up = 0;
               for (int t=0; t<ncon; ++t) {
-                if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+              // for (int t=0; t<1; ++t) {
+                // if moving this vertex AWAY FROM the current partition will
+                // result in an underweighted partition, give up
+                if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                   give_up = 1;
                   break;
                 }
@@ -576,7 +625,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
               
               int overweight = 0;
               for (int t=0; t<ncon; ++t) {
-                if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+              // for (int t=0; t<1; ++t) {
+                // if moving this vertex INTO the new partition will result in
+                // an overweighted partition, give up
+                if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                   overweight = 1;
                   break;
                 }
@@ -606,20 +658,35 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
                 int overweight = 0;
                 for (int t=0; t<ncon; ++t) {
-                  if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                // for (int t=0; t<1; ++t) {
+                  // if moving this vertex INTO the new partition will result in
+                  // an overweighted partition, give up
+                  if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                     overweight = 1;
                     break;
                   }
                 }
 
+                int morebalanced = IsHBalanceBetterTT(
+                    ncon, lpwgts + from * ncon, lpwgts + to * ncon, myvwgt,
+                    ctrl->ubfactor);
+
+                // original expression:
+                // tpwgts[mynbrs[k].pid]*lpwgts[to] < \
+                //       tpwgts[to]*lpwgts[mynbrs[k].pid]
+
                 if ((gain > 0 && !overweight) \
                     || (mynbrs[j].ed == mynbrs[k].ed && \
-                      tpwgts[mynbrs[k].pid]*lpwgts[to] < \
-                      tpwgts[to]*lpwgts[mynbrs[k].pid])) {
+                      morebalanced)) {
                   k = j;
                 }
+                // if ((gain > 0 && !overweight) \
+                //     || (gain >= 0 && morebalanced)) {
+                // if (gain >= 0 && morebalanced) {
+                //   k = j;
+                // }
               }
-            }
+            } // end for: find a better one than the first eligible one
             to = mynbrs[k].pid;
 
             if (mynbrs[k].ed >= myrinfo->id) { 
@@ -627,12 +694,15 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
               int overweight1 = 0, overweight2 = 0;
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 if (lpwgts[from*ncon+t] >= maxwgt[from*ncon+t]) {
                   overweight1 = 1;
                   break;
                 }
               }
+              if (!overweight1)
               for (int t=0; t<ncon; ++t) {
+              // for (int t=0; t<1; ++t) {
                 if (tpwgts[to]*lpwgts[from*ncon+t] > \
                     tpwgts[from]*(lpwgts[to*ncon+t]+myvwgt[t])) {
                   overweight2 = 1;
@@ -650,14 +720,21 @@ static vtx_type S_par_kwayrefine_GREEDY(
             int underweight = 0;
 
             for (int t=0; t<ncon; ++t) {
-              if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+            // for (int t=0; t<1; ++t) {
+              // if moving this vertex INTO the new partition will result in
+              // an overweighted partition, give up
+              if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                 overweight = 1;
                 break;
               }
             }
 
+            if (!overweight)
             for (int t=0; t<ncon; ++t) {
-              if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+            // for (int t=0; t<1; ++t) {
+              // if moving this vertex AWAY FROM the current partition will result in
+              // an underweighted partition, give up
+              if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                 underweight = 1;
                 break;
               }
@@ -696,14 +773,22 @@ static vtx_type S_par_kwayrefine_GREEDY(
         no_improvement = 0;
       }
 
+      total_improvement_for_all_chunks += mycut;
+
       if (myid == 0) {
         graph->mincut -= (mycut/2);
       }
     } /* end chunks */
 
+    dlthread_barrier(ctrl->comm);
+
     if (no_improvement) {
       break;
     }
+
+    // if (total_improvement_for_all_chunks * 2000 < graph->mincut) {
+    //   break;
+    // }
   } /* end passes */
 
   dl_free(cperm);
