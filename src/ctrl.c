@@ -56,7 +56,8 @@ static int const DEFAULT_METIS_SERIAL = 0;
 static int const DEFAULT_PARTFACTOR = 5;
 static double const DEFAULT_STOP_RATIO = 0.85;
 static int const DEFAULT_REMOVEISLANDS = 0;
-static int const DEFAULT_LEAFMATCH = 1;
+// static int const DEFAULT_LEAFMATCH = 1;
+static int const DEFAULT_LEAFMATCH = 0;
 static int const DEFAULT_VWGTDEGREE = 0;
 static int const DEFAULT_IGNORE = MTMETIS_IGNORE_NONE;
 
@@ -203,7 +204,7 @@ ctrl_type * ctrl_create(void)
   ctrl->vwgtdegree = DEFAULT_VWGTDEGREE;
   ctrl->contype = DEFAULT_CONTYPE;
   ctrl->ignore = DEFAULT_IGNORE;
-  ctrl->ondisk = 1;   // TODO wtm 1 for enabled
+  ctrl->ondisk = 1;   // -ondisk = yes by default
 
   return ctrl;
 }

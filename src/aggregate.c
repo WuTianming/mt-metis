@@ -1506,7 +1506,7 @@ static vtx_type S_coarsen_match_SHEM(
 
       int overweight = 0;
       for (int t = 0; t < ncon; ++t) {
-        if (mywgt[t] >= maxvwgt[t]) {
+        if (mywgt[t] > maxvwgt[t]) {
           overweight = 1;
           break;
         }
@@ -1539,7 +1539,7 @@ static vtx_type S_coarsen_match_SHEM(
 
             int newnode_overweight = 0;
             for (int t = 0; t < ncon; ++t) {
-              if (mywgt[t] + gvwgt[nbrid][lvtx*ncon+t] >= maxvwgt[t]) {
+              if (mywgt[t] + gvwgt[nbrid][lvtx*ncon+t] > maxvwgt[t]) {
                 newnode_overweight = 1;
                 break;
               }

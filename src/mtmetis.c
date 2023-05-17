@@ -113,7 +113,10 @@ static void S_launch_func(
         dl_free(arg->adjncy);
     }
     if (arg->vwgt) {
-      dl_free(arg->vwgt);
+      if (arg->is_mmaped)
+        munmap(arg->vwgt, sizeof(wgt_type) * graph->nvtxs * arg->ncon);
+      else
+        dl_free(arg->vwgt);
     }
     if (arg->adjwgt) {
       dl_free(arg->adjwgt);

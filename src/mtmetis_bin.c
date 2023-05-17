@@ -194,6 +194,9 @@ static const cmd_opt_t OPTS[] = {
   {MTMETIS_OPTION_IGNORE,'W',"ignoreweights","Ignore input weights " \
       "on a graph file (default=none).",CMD_OPT_CHOICE,IGNOREWEIGHTS_CHOICES, \
       S_ARRAY_SIZE(IGNOREWEIGHTS_CHOICES)},
+  {MTMETIS_OPTION_TRAINSETLIST,'l',"trainsetlist","Uses a file as a list " \
+      "of training-set nodes. These nodes will be prepended a weight of 1.", \
+      CMD_OPT_STRING,NULL,0},
   {MTMETIS_OPTION_HILLSIZE,'H',"hillsize","The limit to use when searching " \
       "for hills (default=16). This only applies to hill climbing " \
       "refinement types.",CMD_OPT_INT,NULL,0},
@@ -383,86 +386,79 @@ void count_total_deg_of_part(int argc, char ** argv) {
   exit(0);
 }
 
-int read_400M_dataset(
+int read_binary_dataset(
+    char const * const prefix,
     vtx_type * const r_nvtxs,
-    int * const ncon,
+    int * const r_ncon,
     adj_type ** const r_xadj,
     vtx_type ** const r_adjncy,
     wgt_type ** const r_vwgt,
-    wgt_type ** const r_adjwgt)
+    wgt_type ** const r_adjwgt,
+    int usemmap)
 {
   adj_type nedges;
-  FILE *meta, *f_xadj, *f_adjncy;
+  FILE *meta, *f_xadj, *f_adjncy, *f_vwgt;
+  int fd_vwgt, fd_xadj, fd_adjncy;
 
-  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
-  if (fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges) == EOF) return 0;
+  char fname[256];
+
+  sprintf(fname, "%s_meta.txt", prefix);
+  meta = fopen(fname, "r");
+  if (fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T"%d", r_nvtxs, &nedges, r_ncon) == EOF)
+    dl_error("cannot open metadata %s\n", fname);
   fclose(meta);
 
-  *ncon = 0;
+  printf("n=%lld m=%lld ncon=%d\n", (long long)*r_nvtxs, (long long)nedges, (int)*r_ncon);
 
-  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
+  if (*r_ncon > 0) {
+    sprintf(fname, "%s_vwgt.bin", prefix);
+    size_t vwgtlen = (*r_nvtxs) * (*r_ncon);
+    if (usemmap) {
+      fd_vwgt = open(fname, O_RDONLY);
+      *r_vwgt = mmap(NULL, sizeof(wgt_type) * vwgtlen, PROT_READ, MAP_PRIVATE, fd_vwgt, 0);
+      close(fd_vwgt);
+    } else {
+      *r_vwgt = wgt_alloc(vwgtlen);
+      f_vwgt = fopen(fname, "rb");
+      if (fread(*r_xadj, sizeof(adj_type), vwgtlen, f_vwgt) != vwgtlen)
+        dl_error("cannot read file %s for vertex weight\n", fname);
+      fclose(f_vwgt);
+    }
+  } else {
+    *r_vwgt = NULL;
+  }
 
-  *r_xadj = adj_alloc(*r_nvtxs + 1);
-  f_xadj = fopen("/data1/papers400M_bidirected/400M_sparse_indptr.bin", "rb");
-  if (fread(*r_xadj, sizeof(adj_type), *r_nvtxs + 1, f_xadj) != *r_nvtxs + 1) return 0;
-  fclose(f_xadj);
+  sprintf(fname, "%s_indptr.bin", prefix);
+  size_t xadjlen = (*r_nvtxs + 1);
+  if (usemmap) {
+    fd_xadj = open(fname, O_RDONLY);
+    *r_xadj = mmap(NULL, sizeof(adj_type) * xadjlen, PROT_READ, MAP_PRIVATE, fd_xadj, 0);
+    close(fd_xadj);
+  } else {
+    *r_xadj = adj_alloc(xadjlen);
+    f_xadj = fopen(fname, "rb");
+    if (fread(*r_xadj, sizeof(adj_type), xadjlen, f_xadj) != xadjlen)
+      dl_error("cannot read file %s for CSR indptr\n", fname);
+    fclose(f_xadj);
+  }
 
-  *r_adjncy = vtx_alloc(nedges);
-  f_adjncy = fopen("/data1/papers400M_bidirected/400M_sparse_indices.bin", "rb");
-  if (fread(*r_adjncy, sizeof(adj_type), nedges, f_adjncy) != nedges) return 0;
-  fclose(f_xadj);
-
-  *r_adjwgt = NULL;
-  *r_vwgt = NULL;
-
-  /*
-  *r_adjwgt = wgt_alloc(nedges);
-  for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
-  vwgt = 1; vwgt = degree;
-  */
-
-  return 1;
-}
-
-int read_400M_dataset_mmap(
-    vtx_type * const r_nvtxs,
-    int * const ncon,
-    adj_type ** const r_xadj,
-    vtx_type ** const r_adjncy,
-    wgt_type ** const r_vwgt,
-    wgt_type ** const r_adjwgt)
-{
-  adj_type nedges;
-  FILE *meta;
-  int fd_xadj, fd_adjncy;
-
-  meta = fopen("/data1/papers400M_bidirected/400M_sparse_bidirected_meta.txt", "r");
-  fscanf(meta, "%"PF_VTX_T"%*"PF_ADJ_T"%"PF_ADJ_T, r_nvtxs, &nedges);
-  fclose(meta);
-
-  *ncon = 0;
-
-  printf("%lld %lld\n", (long long)*r_nvtxs, (long long)nedges);
-
-  fd_xadj = open("/data1/papers400M_bidirected/400M_sparse_indptr.bin", O_RDONLY);
-  size_t xadjlen = sizeof(adj_type) * (*r_nvtxs + 1);
-  *r_xadj = mmap(NULL, xadjlen, PROT_READ, MAP_PRIVATE, fd_xadj, 0);
-  close(fd_xadj);
   // madvise(*r_xadj, xadjlen, );
 
-  fd_adjncy = open("/data1/papers400M_bidirected/400M_sparse_indices.bin", O_RDONLY);
-  size_t adjncylen = sizeof(vtx_type) * nedges;
-  *r_adjncy = mmap(NULL, adjncylen, PROT_READ, MAP_PRIVATE, fd_adjncy, 0);
-  close(fd_adjncy);
+  sprintf(fname, "%s_indices.bin", prefix);
+  size_t adjncylen = nedges;
+  if (usemmap) {
+    fd_adjncy = open(fname, O_RDONLY);
+    *r_adjncy = mmap(NULL, sizeof(vtx_type) * adjncylen, PROT_READ, MAP_PRIVATE, fd_adjncy, 0);
+    close(fd_adjncy);
+  } else {
+    *r_adjncy = vtx_alloc(nedges);
+    f_adjncy = fopen(fname, "rb");
+    if (fread(*r_adjncy, sizeof(vtx_type), adjncylen, f_adjncy) != adjncylen)
+      dl_error("cannot read file %s for CSR indices\n", fname);
+    fclose(f_adjncy);
+  }
 
   *r_adjwgt = NULL;
-  *r_vwgt = NULL;
-  // *r_adjwgt = wgt_alloc(nedges);
-  // for (int i=0; i < nedges; ++i) *r_adjwgt[i] = 1;
-
-  /*
-  vwgt = 1; vwgt = degree;
-  */
 
   return 1;
 }
@@ -517,18 +513,15 @@ int main(
   dl_start_timer(&timer_input);
 
   /* read the input graph */
-  int load_400M = (strstr(input_file, "400M") != NULL);
-  int is_mmaped = load_400M ? 1 : 0;
+  int load_binary = (strstr(input_file, ".graph") == NULL); // binary, if not .graph suffixed
+  int is_mmaped = load_binary ? 1 : 0;
 
-  if (load_400M) {
+  if (load_binary) {
     // initiate xadj, adjncy, vwgt and adjwgt
-    printf("Loading papers400M-sparse dataset...\n");
-    if (is_mmaped)
-      rv = read_400M_dataset_mmap(&nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt);
-    else
-      rv = read_400M_dataset(&nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt);
+    printf("Loading binary dataset...\n");
+    rv = read_binary_dataset(input_file, &nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt, is_mmaped);
   } else {
-    /*
+    /**
      * the vwgt array (vertex weights) is laid out as follows (example ncon=3):
      * 0 0 0 1 1 1 2 2 2 3 3 3
      * where "0 0 0" is the three weights/constraints of vertex 0.
@@ -555,20 +548,21 @@ int main(
   if (options[MTMETIS_OPTION_IGNORE] != MTMETIS_VAL_OFF) {
     if (((int)options[MTMETIS_OPTION_IGNORE]) & MTMETIS_IGNORE_EDGEWEIGHTS) {
       if (adjwgt) {
-        dl_free(adjwgt);
+        if (!is_mmaped) dl_free(adjwgt);
         adjwgt = NULL;
       }
     }
     if (((int)options[MTMETIS_OPTION_IGNORE]) & MTMETIS_IGNORE_VERTEXWEIGHTS) {
       if (vwgt) {
-        dl_free(vwgt);
+        if (!is_mmaped) dl_free(vwgt);
+        else munmap(vwgt, sizeof(wgt_type) * nvtxs * ncon);
         vwgt = NULL;
       }
     }
   }
 
   if (options[MTMETIS_OPTION_VWGTDEGREE] != MTMETIS_VAL_OFF) {
-    // the degree of each node is used as an *extra* constraint
+    // the degree of each node is appended as an *extra* constraint
     wgt_type * new_vwgt = wgt_alloc(nvtxs * (ncon+1));
     for (i=0;i<nvtxs;++i) {
       for (int j=0;j<ncon;++j) {
@@ -576,13 +570,13 @@ int main(
       }
       new_vwgt[i*(ncon+1)+ncon] = xadj[i+1] - xadj[i];
     }
-    if (vwgt) free(vwgt);
+    if (vwgt) if (!is_mmaped) free(vwgt);
     vwgt = new_vwgt;
     ncon++;
   }
 
   if (options[MTMETIS_OPTION_VWGTONE] != MTMETIS_VAL_OFF) {
-    // the degree of each node is used as an *extra* constraint
+    // 1 (node count) is appended as an *extra* constraint
     wgt_type * new_vwgt = wgt_alloc(nvtxs * (ncon+1));
     for (i=0;i<nvtxs;++i) {
       for (int j=0;j<ncon;++j) {
@@ -590,9 +584,46 @@ int main(
       }
       new_vwgt[i*(ncon+1)+ncon] = 1;
     }
-    if (vwgt) free(vwgt);
+    if (vwgt) if (!is_mmaped) free(vwgt);
     vwgt = new_vwgt;
     ncon++;
+  }
+
+  // check if we need to prepend weight = train-set
+  for (i=0;i<nargs;++i) {
+    if (args[i].type == CMD_OPT_STRING) {
+      const char *filename = args[i].val.s;
+      printf("using train-set: %s\n", filename);
+
+      // prepend the weight
+      {
+        wgt_type *new_vwgt = wgt_alloc(nvtxs * (ncon + 1));
+
+        for (i = 0; i < nvtxs; ++i) {
+          for (int j = 0; j < ncon; ++j) {
+            new_vwgt[i * (ncon + 1) + j+1] = vwgt[i * ncon + j];
+          }
+          new_vwgt[i * (ncon + 1) + 0] = 0;
+        }
+
+        FILE *f = fopen(filename, "r");
+        if (f == NULL) {
+          dl_error("cannot open training-set list: %s\n", filename);
+        }
+        int v;
+        while (fscanf(f, "%d", &v) != EOF) {
+          new_vwgt[v * (ncon + 1) + 0] = 1;
+        }
+        fclose(f);
+
+        if (vwgt)
+          if (!is_mmaped) free(vwgt);
+        vwgt = new_vwgt;
+        ncon++;
+      }
+
+      break;
+    }
   }
 
   // after all the modification on constraints, we still have no constraints
@@ -600,7 +631,7 @@ int main(
     ncon = 1;
     // remove everything so that the code below will treat it as uniform vertex
     // weights
-    if (vwgt) { free(vwgt); vwgt = NULL; }
+    if (vwgt) { if (!is_mmaped) free(vwgt); vwgt = NULL; }
     // vwgt = wgt_init_alloc(1, nvtxs);
   }
 

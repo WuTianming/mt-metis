@@ -494,7 +494,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   /* setup max/min partition weights */
   for (i=0;i<nparts;++i) {
     for (int t = 0; t < ncon; ++t) {
-      // real_type ubf = (t >= 1 ? 1.2 : ctrl->ubfactor);
+      // real_type ubf = (t >= 1 ? 1.1 : ctrl->ubfactor);
+      // real_type ubf = (t < 1 ? 1.1 : ctrl->ubfactor);
       real_type ubf = ctrl->ubfactor;
       maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ubf;
       minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ubf);
@@ -605,7 +606,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
               // for (int t=0; t<1; ++t) {
                 // if moving this vertex AWAY FROM the current partition will
                 // result in an underweighted partition, give up
-                if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+                if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                   give_up = 1;
                   break;
                 }
@@ -627,7 +628,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
               // for (int t=0; t<1; ++t) {
                 // if moving this vertex INTO the new partition will result in
                 // an overweighted partition, give up
-                if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                   overweight = 1;
                   break;
                 }
@@ -660,7 +661,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
                 // for (int t=0; t<1; ++t) {
                   // if moving this vertex INTO the new partition will result in
                   // an overweighted partition, give up
-                  if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+                  if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                     overweight = 1;
                     break;
                   }
@@ -722,7 +723,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
             // for (int t=0; t<1; ++t) {
               // if moving this vertex INTO the new partition will result in
               // an overweighted partition, give up
-              if (lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
+              if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                 overweight = 1;
                 break;
               }
@@ -733,7 +734,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
             // for (int t=0; t<1; ++t) {
               // if moving this vertex AWAY FROM the current partition will result in
               // an underweighted partition, give up
-              if (lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
+              if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                 underweight = 1;
                 break;
               }
@@ -785,9 +786,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
       break;
     }
 
-    if (total_improvement_for_all_chunks * 2000 < graph->mincut) {
-      break;
-    }
+    // if (total_improvement_for_all_chunks * 2000 < graph->mincut) {
+    //   break;
+    // }
   } /* end passes */
 
   dl_free(cperm);

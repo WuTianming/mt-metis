@@ -78,7 +78,12 @@ graph_type * par_coarsen_graph(
     for (int i = 0; i < graph->ncon; ++i) {
       ctrl->maxvwgt[i] = \
           /* 1.5 * graph->tvwgt / ctrl->coarsen_to; */
-          1.5*graph->tvwgt[i] / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+          // 1.5*graph->tvwgt[i] / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0);
+
+          // when dealing with training_mask, tvwgt/nvtxs * 4.0 is too small (<1)
+          // so the aggregation step will just be skipped
+          // 1.5*(graph->tvwgt[i] / dl_max(ctrl->coarsen_to,graph->nvtxs/4.0) + 2);
+          1.5*(graph->tvwgt[i] / (ctrl->coarsen_to) + 2);
     }
   }
   dlthread_barrier(ctrl->comm);
