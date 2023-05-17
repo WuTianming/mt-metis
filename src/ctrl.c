@@ -391,7 +391,6 @@ int ctrl_parse(
     ctrl->leafmatch = (int)options[MTMETIS_OPTION_LEAFMATCH];
   }
 
-  // TODO add option for adjchunks
   if (options[MTMETIS_OPTION_ADJCHUNKSIZE] != MTMETIS_VAL_OFF) {
     ctrl->adjchunksize = (size_t)options[MTMETIS_OPTION_ADJCHUNKSIZE] * 1024 * 1024;
   }
