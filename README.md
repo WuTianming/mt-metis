@@ -43,7 +43,7 @@ The script will download the dataset from the OGB website and convert it into bi
 
 - `[graphname]_meta.txt`: the metadata of the dataset, including the number of nodes, edges, and the number of constraints.
 - `[graphname]_vwgt.bin`: the node weights. Used as constraints to balance the nodes in each partition.
-- `[graphname]_indptr.bin` and `xxx_indices.bin`: the graph structure in CSR format.
+- `[graphname]_indptr.bin` and `[graphname]_indices.bin`: the graph structure in CSR format.
 
 You can then pass `[graphname]` as the input to `mt-metis`.
 
@@ -68,7 +68,7 @@ Arguments:
 
 - `#nthreads`: number of threads to use
 - `-t`: print timing information (optional)
-- `-K<n>`: the maximum number of edges kept in memory. Setting this value limits the maximum used memory by splitting the structural data into chunks and only load a fraction of the whole graph at a time. Example: `-K50` makes every chunk contain at most 50 mega-edges. Default is unlimited
+- `-K<n>`: the chunk size. Setting this value limits the maximum used memory by splitting the structural data into chunks and only load a fraction of the whole graph at a time. Example: `-K50` makes every chunk contain at most 50 mega-edges. Default is unlimited
 - `graph data`: can be METIS format (`.graph` file) or binary format
 - `#parts`: total number of partitions
 - `partfile`: the file to output partition assignments (optional)
