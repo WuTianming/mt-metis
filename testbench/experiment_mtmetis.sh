@@ -1,9 +1,6 @@
 #!/bin/bash
 
-# CHUNKSIZE=-1  bash ./launch_experiment.sh
-# CHUNKSIZE=200 bash ./launch_experiment.sh
-# CHUNKSIZE=150 bash ./launch_experiment.sh
-
+# the location of the prepared binary format datasets:
 prefix=/data1/mt-metis-final-exp/datasets/mtmetis-binary/ogbn-
 
 DATASET=${prefix}products CHUNKSIZE=100 bash ./launch_mtmetis.sh

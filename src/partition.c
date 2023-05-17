@@ -669,7 +669,7 @@ void partition_print_info(
     }
 
     /* Compute objective-related infomration */
-    printf(" - Edgecut and communication volume calculation (TODO:) \n\n");
+    // printf(" - Edgecut and communication volume calculation:\n\n");
     // printf(" - Edgecut: %"PF_WGT_T", communication volume: %"PF_VTX_T".\n\n", \
     //   S_ser_calc_cut(graph,where),S_ser_calc_comvol(graph,where,nparts));
 
