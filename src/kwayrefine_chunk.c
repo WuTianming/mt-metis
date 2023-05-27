@@ -276,6 +276,7 @@ static wgt_type S_move_vertex(      // uses combuffer_add
   cut = 0;
 
   for (int k=0;k<ncon;++k) {
+    // update local partition weights -- no concurrency issues
     pwgts[to*ncon+k] += vwgt[i*ncon+k];
     pwgts[from*ncon+k] -= vwgt[i*ncon+k];
   }
@@ -436,6 +437,37 @@ static int IsHBalanceBetterTT(int ncon, const wgt_type *pt1, const wgt_type *pt2
   return sm2 < sm1;
 }
 
+static void S_par_update_pwgt_range(
+    ctrl_type * const ctrl,
+    graph_type * const graph,
+    int myid,
+    wgt_type *maxwgt,
+    wgt_type *minwgt,
+    wgt_type * const lpwgts,
+    int ncon,
+    int nparts,
+    double ubf)
+{
+  /* now, set maxwgt and minwgt so that the aggregate delta won't cause
+   * overweighting */
+  int i;
+  int nthreads = dlthread_get_nthreads(graph->comm);
+
+  for (int t = 0; t < ncon; ++t) {
+    for (i=0;i<nparts;++i) {
+      wgt_type upper = ctrl->tpwgts[i] * graph->tvwgt[t] * ubf;
+      wgt_type lower = ctrl->tpwgts[i] * graph->tvwgt[t] * (2.0 - ubf);
+      maxwgt[i*ncon+t] = lpwgts[i*ncon+t] + (upper - lpwgts[i*ncon+t]) * 1.00 / nthreads;
+      minwgt[i*ncon+t] = lpwgts[i*ncon+t] - (lpwgts[i*ncon+t] - lower) * 1.00 / nthreads;
+    }
+  }
+  // if (myid == 0)
+  // for (int t = 0; t < ncon; ++t) {
+  //   // print the max/min partition weights
+  //   printf("maxwgt[%d] = %"PF_WGT_T", minwgt[%d] = %"PF_WGT_T"\n", t, maxwgt[t], t, minwgt[t]);
+  // }
+}
+
 static vtx_type S_par_kwayrefine_GREEDY(
     ctrl_type * const ctrl, 
     graph_type * const graph,
@@ -492,20 +524,8 @@ static vtx_type S_par_kwayrefine_GREEDY(
   bnd = kwinfo->bnd;
 
   /* setup max/min partition weights */
-  for (i=0;i<nparts;++i) {
-    for (int t = 0; t < ncon; ++t) {
-      // real_type ubf = (t >= 1 ? 1.1 : ctrl->ubfactor);
-      // real_type ubf = (t < 1 ? 1.1 : ctrl->ubfactor);
-      real_type ubf = ctrl->ubfactor;
-      maxwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*ubf;
-      minwgt[i*ncon+t] = ctrl->tpwgts[i]*graph->tvwgt[t]*(1.0/ubf);
-    }
-  }
-  if (myid == 0)
-  for (int t = 0; t < ncon; ++t) {
-    // print the max/min partition weights
-    printf("maxwgt[%d] = %"PF_WGT_T", minwgt[%d] = %"PF_WGT_T"\n", t, maxwgt[t], t, minwgt[t]);
-  }
+  // FIXME:
+  S_par_update_pwgt_range(ctrl, graph, myid, maxwgt, minwgt, lpwgts, ncon, nparts, ctrl->ubfactor);
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
   DL_ASSERT(check_kwbnd(kwinfo->bnd,graph,1),"Bad boundary");
@@ -761,6 +781,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
         /* update my partition weights */
         S_par_sync_pwgts(myid,nparts,ncon,pwgts,lpwgts,ctrl->comm);
+
+        S_par_update_pwgt_range(ctrl, graph, myid, maxwgt, minwgt, lpwgts, ncon, nparts, ctrl->ubfactor);
+        dlthread_barrier(ctrl->comm);
 
       } /* end directions */
 
