@@ -622,9 +622,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
             if (myrinfo->id > 0) {
               int give_up = 0;
               for (int t=0; t<ncon; ++t) {
-              // for (int t=0; t<1; ++t) {
-                // if moving this vertex AWAY FROM the current partition will
-                // result in an underweighted partition, give up
                 if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                   give_up = 1;
                   break;
@@ -644,9 +641,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
               
               int overweight = 0;
               for (int t=0; t<ncon; ++t) {
-              // for (int t=0; t<1; ++t) {
-                // if moving this vertex INTO the new partition will result in
-                // an overweighted partition, give up
                 if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                   overweight = 1;
                   break;
@@ -677,9 +671,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
                 int overweight = 0;
                 for (int t=0; t<ncon; ++t) {
-                // for (int t=0; t<1; ++t) {
-                  // if moving this vertex INTO the new partition will result in
-                  // an overweighted partition, give up
                   if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                     overweight = 1;
                     break;
@@ -713,7 +704,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
               int overweight1 = 0, overweight2 = 0;
               for (int t=0; t<ncon; ++t) {
-              // for (int t=0; t<1; ++t) {
                 if (lpwgts[from*ncon+t] >= maxwgt[from*ncon+t]) {
                   overweight1 = 1;
                   break;
@@ -721,7 +711,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
               }
               if (!overweight1)
               for (int t=0; t<ncon; ++t) {
-              // for (int t=0; t<1; ++t) {
                 if (tpwgts[to]*lpwgts[from*ncon+t] > \
                     tpwgts[from]*(lpwgts[to*ncon+t]+myvwgt[t])) {
                   overweight2 = 1;
@@ -739,9 +728,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
             int underweight = 0;
 
             for (int t=0; t<ncon; ++t) {
-            // for (int t=0; t<1; ++t) {
-              // if moving this vertex INTO the new partition will result in
-              // an overweighted partition, give up
               if (myvwgt[t] > 0 && lpwgts[to*ncon+t]+myvwgt[t] > maxwgt[to*ncon+t]) {
                 overweight = 1;
                 break;
@@ -750,9 +736,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
             if (!overweight)
             for (int t=0; t<ncon; ++t) {
-            // for (int t=0; t<1; ++t) {
-              // if moving this vertex AWAY FROM the current partition will result in
-              // an underweighted partition, give up
               if (myvwgt[t] > 0 && lpwgts[from*ncon+t]-myvwgt[t] < minwgt[from*ncon+t]) {
                 underweight = 1;
                 break;
