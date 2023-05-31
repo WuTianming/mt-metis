@@ -701,6 +701,9 @@ void par_contract_graph(
 {
   switch (ctrl->contype) {
     case MTMETIS_CONTYPE_CLS:
+    case MTMETIS_CONTYPE_CLS_QUADRATIC:
+    case MTMETIS_CONTYPE_CLS_RDREAD:
+    case MTMETIS_CONTYPE_CLS_RDWRITE:
       S_par_contract_CLS(ctrl,graph,mycnvtxs,gmatch,fcmap);
       break;
     case MTMETIS_CONTYPE_DENSE:

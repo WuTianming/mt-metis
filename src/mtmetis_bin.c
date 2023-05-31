@@ -54,8 +54,14 @@ static const cmd_opt_pair_t CTYPE_CHOICES[] = {
 
 
 static const cmd_opt_pair_t CONTYPE_CHOICES[] = {
-  {MTMETIS_STR_CONTYPE_CLS,"Hash-table with linear scanning", \
+  {MTMETIS_STR_CONTYPE_CLS,"Hash-table with linear scanning. defaults to quadratic", \
       MTMETIS_CONTYPE_CLS},
+  {MTMETIS_STR_CONTYPE_CLS_QUADRATIC,"Hash-table with linear scanning, quadratic read scheme", \
+      MTMETIS_CONTYPE_CLS_QUADRATIC},
+  {MTMETIS_STR_CONTYPE_CLS_RDREAD,"Hash-table with linear scanning, random read scheme", \
+      MTMETIS_CONTYPE_CLS_RDREAD},
+  {MTMETIS_STR_CONTYPE_CLS_RDWRITE,"Hash-table with linear scanning, random write scheme", \
+      MTMETIS_CONTYPE_CLS_RDWRITE},
   {MTMETIS_STR_CONTYPE_DENSE,"Dense vector",MTMETIS_CONTYPE_DENSE},
   {MTMETIS_STR_CONTYPE_SORT,"Sort and merge",MTMETIS_CONTYPE_SORT}
 };

@@ -141,6 +141,10 @@ typedef enum mtmetis_ctype_t {
 
 typedef enum mtmetis_contype_t {
   MTMETIS_CONTYPE_CLS,
+  // variants of MTMETIS_CONTYPE_CLS, differing on how they read the chunks
+  MTMETIS_CONTYPE_CLS_QUADRATIC,
+  MTMETIS_CONTYPE_CLS_RDREAD,
+  MTMETIS_CONTYPE_CLS_RDWRITE,
   MTMETIS_CONTYPE_DENSE,
   MTMETIS_CONTYPE_SORT
 } mtmetis_contype_t;

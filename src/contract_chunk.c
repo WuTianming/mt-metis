@@ -130,192 +130,6 @@ static void S_adjust_cmap(
 
 
 /**
- * @brief Perform contraction using a dense vector.
- *
- * @param ctrl The control structure.
- * @param graph The graph structure.
- * @param mycnvtxs The number of coarse vertices owned by this thread.
- * @param gmatch The global match array.
- * @param fcmap The first fine vertex for each coarse vertex.
- */
-static void S_par_contract_DENSE(
-    ctrl_type * const ctrl, 
-    graph_type * const graph, 
-    vtx_type const mycnvtxs, 
-    vtx_type const * const * const gmatch, 
-    vtx_type const * const fcmap)
-{
-  if (graph->ncon > 1) {
-    dl_error("Dense contraction only works for 1-constrained graphs for now\n");
-  }
-
-  adj_type cnedges, cnedges_upperlimit, l, maxdeg, j, i;
-  tid_type o, t;
-  vtx_type v, c, cg, k;
-  wgt_type ewgt;
-  adj_type * table;
-  graph_type * cgraph;
-  graphdist_type cdist;
-
-  tid_type const myid = dlthread_get_id(ctrl->comm);
-  tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
-
-  /* make accessing my old graph easy */
-  vtx_type const mynvtxs = graph->mynvtxs[myid];
-  adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
-  vtx_type const * const * const gadjncy = (vtx_type const * const *)graph->adjncy;
-  wgt_type const * const * const gvwgt = (wgt_type const * const *)graph->vwgt;
-  wgt_type const * const * const gadjwgt = (wgt_type const * const *)graph->adjwgt;
-
-  vtx_type const * const * const gcmap = (vtx_type const **)graph->cmap;
-
-  if (myid == 0) {
-    dl_start_timer(&(ctrl->timers.contraction));
-  }
-
-  cgraph = par_graph_setup_coarse(graph,mycnvtxs);
-
-  cdist = cgraph->dist;
-
-  S_adjust_cmap(graph->cmap[myid],mynvtxs,graph->dist,cdist);
-
-  /* count possible edges (upper limit) */
-  cnedges_upperlimit = 0;
-  maxdeg = 0;
-  for (c=0;c<mycnvtxs;++c) {
-    v = fcmap[c];   // v is the first vertex that makes up coarse c
-    o = myid;
-    l = 0;
-    do {
-      l += gxadj[o][v+1] - gxadj[o][v];
-
-      // traverse like a linked list (although the match list is either len=1 or len=2)
-      // to accommodate cases of self-matching
-      v = gmatch[o][v];
-      if (v >= graph->mynvtxs[o]) {
-        o = gvtx_to_tid(v,graph->dist);
-        v = gvtx_to_lvtx(v,graph->dist);
-      }
-    } while (!(o == myid && v == fcmap[c]));
-
-    // the maximum degree possible for a coarse vtx (Caveat: can this get big?)
-    dl_storemax(maxdeg,l);
-
-    // an upper limit for total coarse edges
-    cnedges_upperlimit += l;
-  }
-
-  adj_type * const mycxadj = cgraph->xadj[myid];
-  // over-allocating...
-  // TODO: apply the new chunk-based memory model to this function
-  vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(cnedges_upperlimit);
-  wgt_type * const mycvwgt = cgraph->vwgt[myid];
-  wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(cnedges_upperlimit);
-
-  table = NULL;
-
-  table = adj_init_alloc(NULL_ADJ,graph->gnvtxs);
-
-  cnedges = 0;    // coarse edge count is to be calculated accurately later
-  mycxadj[0] = 0;
-
-  dlthread_barrier(ctrl->comm);
-
-  /* set max degree for the coarse graph */
-  for (c=0;c<mycnvtxs;++c) {
-    cg = lvtx_to_gvtx(c,myid,cdist);
-    /* initialize the coarse vertex */
-    mycvwgt[c] = 0;     // the v weight is the sum of original vertices
-
-    v = fcmap[c];
-    o = myid;
-    DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist),
-        graph->dist),"%"PF_TID_T);
-    do {    // traverse all original vertices (o in v) for this coarse vertex c
-      DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
-
-      /* transfer over vertex stuff from v and u */
-      mycvwgt[c] += gvwgt[o][v];
-
-      // this kills locality when accessing the fine graph:
-      //   (o, v) = canonical(gmatch[o][v]);
-
-      /* for all edges emanating from (v in o): */
-      for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
-        k = gadjncy[o][j];    // TODO slice
-        if (k < graph->mynvtxs[o]) {
-          t = o;
-        } else {
-          t = gvtx_to_tid(k,graph->dist);
-          k = gvtx_to_lvtx(k,graph->dist);
-        } // edge: (v in o) -> (k in t)
-        k = gcmap[t][k];
-        if (gvtx_to_tid(k,cdist) == myid) {
-          k = gvtx_to_lvtx(k,cdist);
-        } // k is now the canonical expression of the coarse vertex that j leads to
-
-        if (k == c || k == cg) {
-          /* internal edge */
-        } else {
-          /* external edge */
-          i = table[k];
-          ewgt = graph->uniformadjwgt ? 1 : gadjwgt[o][j];  // TODO slice
-          if (i == NULL_ADJ) {
-            /* new edge */
-            mycadjncy[cnedges] = k;     // TODO slice
-            mycadjwgt[cnedges] = ewgt;  // TODO slice
-            table[k] = cnedges++;       // put a new edge in the dense vector
-          } else {
-            /* duplicate edge */
-            mycadjwgt[i] += ewgt;       // TODO slice
-          }
-        }
-      }
-
-      v = gmatch[o][v];
-      if (v >= graph->mynvtxs[o]) {
-        o = gvtx_to_tid(v,graph->dist);
-        v = gvtx_to_lvtx(v,graph->dist);
-      }
-    } while (!(myid == o && v == fcmap[c]));
-
-    /* clear the table */
-    for (j = cnedges;j > mycxadj[c];) {
-      --j;
-      k = mycadjncy[j];     // an std::unordered_map would be perfect here...
-      table[k] = NULL_ADJ;
-    }
-
-    mycxadj[c+1] = cnedges;
-  }
-
-  dl_free(table);
-
-  cgraph->mynedges[myid] = cnedges;
-
-  // TODO: why not???
-  // but that's OK anyway, because in the ondisk implementation
-  //   the space will be freed soon.
-  //graph_readjust_memory(cgraph,adjsize);
-
-  dlthread_barrier(ctrl->comm);
-  if (myid == 0) {
-    cgraph->nedges = adj_sum(cgraph->mynedges,nthreads);
-  }
-
-  par_graph_setup_twgts(cgraph);
-  
-  if (myid == 0) {
-    dl_stop_timer(&(ctrl->timers.contraction));
-  }
-
-  // Note: the check.c utilities will be unavailable for quite some time
-  // because they require a total rewrite
-  // DL_ASSERT(check_graph(cgraph) == 1, "Bad graph generated in coarsening\n");
-}
-
-
-/**
  * @brief Perform contraction using a single hash table, performing a linear
  * scan on the edge list in the case of a collsion.
  *
@@ -330,7 +144,8 @@ static void S_par_contract_CLS_quadratic(
     graph_type * const graph, 
     vtx_type const mycnvtxs, 
     vtx_type const * const * const gmatch, 
-    vtx_type const * const fcmap)
+    vtx_type const * const fcmap,
+    int dense)
 {
   int ncon = graph->ncon;
 
@@ -340,7 +155,8 @@ static void S_par_contract_CLS_quadratic(
   wgt_type ewgt;
   graph_type * cgraph;
   graphdist_type cdist;
-  offset_type * htable;
+  offset_type * htable; // hash table
+  adj_type * table;     // dense vector
 
   tid_type const myid = dlthread_get_id(ctrl->comm);
   tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
@@ -380,15 +196,10 @@ static void S_par_contract_CLS_quadratic(
     dl_storemax(maxchunkcnt, graph->chunkcnt[t]);
   }
 
-/*
-  // I have to implement chunks in this too
-  // or just disable this branch
-/*
   if (maxdeg > MASK_MAX_DEG) {
-    S_par_contract_DENSE(ctrl,graph,mycnvtxs,gmatch,fcmap);
-    return;
+    // turn on dense vector contraction
+    dense = 1;
   }
-*/
 
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.contraction));
@@ -416,7 +227,10 @@ static void S_par_contract_CLS_quadratic(
   vtx_type * mycchunkofst = cgraph->chunkofst[myid] = vtx_alloc(maxchunkcnt * 1.5 + 5);
   mycchunkofst[0] = 0;
 
-  htable = offset_init_alloc(NULL_OFFSET,MASK_SIZE);
+  if (dense)
+    table = adj_init_alloc(NULL_ADJ, graph->gnvtxs);
+  else
+    htable = offset_init_alloc(NULL_OFFSET,MASK_SIZE);
 
   cnedges = 0;
   mycxadj[0] = 0;
@@ -594,10 +408,14 @@ static void S_par_contract_CLS_quadratic(
               /* internal edge */
             } else {
               /* external edge */
-              l = k&MASK;
-              i = htable[l];
+              if (dense) {
+                i = table[k];
+              } else {
+                l = k&MASK;
+                i = htable[l];
+              }
               ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
-              if (i == NULL_OFFSET) {
+              if ((dense && i == NULL_ADJ) || (!dense && i == NULL_OFFSET)) {
                 /* new edge */
                 // TODO because this is filled sequentially, we can just call
                 // fwrite without manually buffering with `mycadjncy`
@@ -605,28 +423,35 @@ static void S_par_contract_CLS_quadratic(
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 adjwgt_sum += ewgt;
-                htable[l] = (offset_type)(cnedges - start); 
-                ++cnedges;  // NOTE: this is filled sequentially too
-              } else {  // hash collision
-                i += start;
-                /* search for existing edge */
-                for (jj=i;jj<cnedges;++jj) {
-                  if (pcadjncy[jj] == k) {
-                    pcadjwgt[jj] += ewgt;
-                    if (pcadjwgt[jj] == 0) {
-                      fprintf(stderr, "error!\n");
-                    }
-                    adjwgt_sum += ewgt;
-                    break;
-                  }
+                if (dense) {
+                  table[k] = cnedges;
+                } else {
+                  htable[l] = (offset_type)(cnedges - start); 
                 }
-                if (jj == cnedges) {
-                  /* we didn't find the edge, so add it */
-                  // TODO call fwrite directly
-                  pcadjncy[cnedges] = k;
-                  pcadjwgt[cnedges] = ewgt;
+                ++cnedges;  // NOTE: this is filled sequentially too
+              } else {      // hash collision or duplicate edge
+                if (dense) {
+                  pcadjwgt[i] += ewgt;
                   adjwgt_sum += ewgt;
-                  ++cnedges;
+                } else {
+                  // maybe hash collision? check edge list
+                  i += start;
+                  /* search for existing edge */
+                  for (jj=i;jj<cnedges;++jj) {
+                    if (pcadjncy[jj] == k) {
+                      pcadjwgt[jj] += ewgt;
+                      adjwgt_sum += ewgt;
+                      break;
+                    }
+                  }
+                  if (jj == cnedges) {
+                    /* we didn't find the edge, so add it */
+                    // OPTIMIZE: reduce buffer size and call fwrite here
+                    pcadjncy[cnedges] = k;
+                    pcadjwgt[cnedges] = ewgt;
+                    adjwgt_sum += ewgt;
+                    ++cnedges;
+                  }
                 }
               }
             }
@@ -640,11 +465,19 @@ static void S_par_contract_CLS_quadratic(
         } while (!(myid == o && v == fcmap[c]));
 
         /* clear the htable */
-        for (j = cnedges;j > mycxadj[c];) {
-          --j;
-          k = pcadjncy[j];
-          l = (k&MASK);
-          htable[l] = NULL_OFFSET;
+        if (dense) {
+          for (j = cnedges; j > mycxadj[c];) {
+            --j;
+            k = pcadjncy[j];
+            table[k] = NULL_ADJ;
+          }
+        } else {
+          for (j = cnedges;j > mycxadj[c];) {
+            --j;
+            k = pcadjncy[j];
+            l = (k&MASK);
+            htable[l] = NULL_OFFSET;
+          }
         }
 
         mycxadj[c+1] = cnedges;
@@ -655,6 +488,7 @@ static void S_par_contract_CLS_quadratic(
 
   DL_ASSERT_EQUALS(c, mycnvtxs, "%"PF_VTX_T);
 
+  // write left over segments of edge array
   size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt - 1]];
   if (chunkadjs > 0) {
 #ifdef PRINT_LOOP_VAR
@@ -672,7 +506,11 @@ static void S_par_contract_CLS_quadratic(
 
   dl_free(local_adjncy);
   dl_free(local_adjwgt);
-  dl_free(htable);
+  if (dense) {
+    dl_free(table);
+  } else {
+    dl_free(htable);
+  }
 
   cgraph->mynedges[myid] = cnedges;
 
@@ -773,10 +611,18 @@ void par_contract_chunk_graph(
 {
   switch (ctrl->contype) {
     case MTMETIS_CONTYPE_CLS:
-      S_par_contract_CLS_quadratic(ctrl,graph,mycnvtxs,gmatch,fcmap);
+    case MTMETIS_CONTYPE_CLS_QUADRATIC:
+      S_par_contract_CLS_quadratic(ctrl,graph,mycnvtxs,gmatch,fcmap, /*dense*/0);
+      break;
+    case MTMETIS_CONTYPE_CLS_RDREAD:
+      // TODO
+      break;
+    case MTMETIS_CONTYPE_CLS_RDWRITE:
+      // TODO
       break;
     case MTMETIS_CONTYPE_DENSE:
-      dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
+      S_par_contract_CLS_quadratic(ctrl,graph,mycnvtxs,gmatch,fcmap, /*dense*/1);
+      // dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
       break;
     case MTMETIS_CONTYPE_SORT:
       dl_error("Unsupported contraction type '%d' for chunk-based contraction\n",ctrl->contype);
