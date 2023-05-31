@@ -527,6 +527,66 @@ static void S_par_contract_CLS_quadratic(
     dl_stop_timer(&(ctrl->timers.contraction));
   }
 
+  // we may dump a certain level of graph in the format of binary graph input,
+  // to be re-used or inspected later
+#if 0
+{
+  // int dumplevel = 10;
+  // int dumplevel = 4;
+  int dumplevel = -1;
+
+  if (myid == 0 && cgraph->level == dumplevel) {
+    printf("writing contraction graph to file...\n");
+    vtx_type voff, idx;
+    wgt_type cut;
+    adj_type *xadj;
+    vtx_type *adjncy;
+    wgt_type *adjwgt, *vwgt;
+    pid_type *where = NULL, **r_where;
+
+    tid_type const myid = dlthread_get_id(ctrl->comm);
+    tid_type const nthreads = dlthread_get_nthreads(ctrl->comm);
+
+    vtx_type const nvtxs = cgraph->nvtxs;
+    int const ncon = cgraph->ncon;
+
+    size_t const tcuts = ctrl->ninitsolutions;
+
+    size_t myncuts = (tcuts / nthreads);
+
+    if (myid == 0) {
+    dl_start_timer(&ctrl->timers.initpart);
+    }
+
+    r_where = dlthread_get_shmem(sizeof(pid_type *), ctrl->comm);
+
+    par_graph_gather(cgraph, &xadj, &adjncy, &vwgt, &adjwgt, &voff);
+
+    char fname[256];
+    FILE *f;
+    sprintf(fname, "dcontract_lvl%d_meta.txt", dumplevel);
+    f = fopen(fname, "w");
+    adj_type edges = xadj[nvtxs];
+    fprintf(f, "%"PF_VTX_T"\n%"PF_ADJ_T"\n%"PF_ADJ_T"\n%d\n", nvtxs, edges/2, edges, ncon);
+    fclose(f);
+    sprintf(fname, "dcontract_lvl%d_indptr.bin", dumplevel);
+    f = fopen(fname, "w");
+    fwrite(xadj, sizeof(adj_type), nvtxs+1, f);
+    fclose(f);
+    sprintf(fname, "dcontract_lvl%d_indices.bin", dumplevel);
+    f = fopen(fname, "w");
+    fwrite(adjncy, sizeof(vtx_type), edges, f);
+    fclose(f);
+    sprintf(fname, "dcontract_lvl%d_vwgt.bin", dumplevel);
+    f = fopen(fname, "w");
+    fwrite(vwgt, sizeof(wgt_type), nvtxs*ncon, f);
+    fclose(f);
+
+    abort();
+  }
+}
+#endif
+
   if (myid == 0) {
     for (int i = 0; i < nthreads; ++i) {
       printf("thread %d: c#=%2zu; [%7zu|%9zu]: (", i, cgraph->chunkcnt[i], cgraph->mynvtxs[i], cgraph->mynedges[i]);

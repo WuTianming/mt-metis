@@ -524,7 +524,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
   bnd = kwinfo->bnd;
 
   /* setup max/min partition weights */
-  // FIXME:
   S_par_update_pwgt_range(ctrl, graph, myid, maxwgt, minwgt, lpwgts, ncon, nparts, ctrl->ubfactor);
 
   DL_ASSERT(check_kwinfo(kwinfo,graph,(pid_type const **)gwhere),"Bad kwinfo");
