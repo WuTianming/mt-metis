@@ -537,8 +537,12 @@ int main(
     int argc, 
     char ** argv) 
 {
-  // count_total_deg_of_part(argc, argv);
-  count_total_cut_of_part(argc, argv);
+  if (strcmp(argv[1], "debugcut") == 0) {
+    count_total_cut_of_part(argc, argv+1);
+  }
+  if (strcmp(argv[1], "debugdeg") == 0) {
+    count_total_deg_of_part(argc, argv+1);
+  }
 
   int rv, times, verbosity;
   size_t nargs;

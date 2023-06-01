@@ -474,9 +474,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
-  if (graph->level % 3 != 0) {
-    return 0;
-  }
+  // if (graph->level % 3 != 0) {
+  //   return 0;
+  // }
 
   int ncon = graph->ncon;
 
