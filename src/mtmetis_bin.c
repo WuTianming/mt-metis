@@ -414,10 +414,10 @@ void count_total_cut_of_part(int argc, char ** argv) {
   printf("reading input parts file %s...\n", input_parts);
   FILE *fparts = fopen(input_parts, "r");
 
-  adj_type total_edges[8], external_edges[8];
+  adj_type total_edges[8], internal_edges[8];
   short * part = (short *)malloc(sizeof(short) * nvtxs);
   memset(total_edges, 0, sizeof(total_edges));
-  memset(external_edges, 0, sizeof(total_edges));
+  memset(internal_edges, 0, sizeof(total_edges));
 
   for (size_t i = 0; i < nvtxs; ++i) {
     fscanf(fparts, "%hd", &part[i]);
@@ -427,25 +427,25 @@ void count_total_cut_of_part(int argc, char ** argv) {
   for (size_t i = 0; i < nvtxs; ++i) {
     total_edges[part[i]] += (xadj[i+1] - xadj[i]);
     for (adj_type j = xadj[i]; j < xadj[i+1]; ++j) {
-      if (part[i] != part[adjncy[j]]) {
-        ++external_edges[part[i]];
+      if (part[i] == part[adjncy[j]]) {
+        ++internal_edges[part[i]];
       }
     }
   }
 
   for (int i = 0; i < 8; ++i) {
-    printf("part %d: %lld/%lld\n", i, external_edges[i], total_edges[i]);
+    printf("part %d: %lld/%lld\n", i, internal_edges[i], total_edges[i]);
   }
 
-  adj_type sum = 0, sum_ext = 0;
+  adj_type sum = 0, sum_in = 0;
 
   for (int i = 0; i < 8; ++i) {
     sum += total_edges[i];
-    sum_ext += external_edges[i];
+    sum_in += internal_edges[i];
   }
 
-  printf("total: %lld/%lld\n", sum_ext, sum);
-  printf("total: %lld/%lld, %.2lf%%\n", sum_ext/2, sum/2, 1.00 * sum_ext / sum);
+  printf("total internal: %lld/%lld\n", sum_in, sum);
+  printf("total internal: %lld/%lld, %.2lf%%\n", sum_in/2, sum/2, 100.00 * sum_in / sum);
 
   exit(0);
 }
@@ -538,7 +538,7 @@ int main(
     char ** argv) 
 {
   // count_total_deg_of_part(argc, argv);
-  // count_total_cut_of_part(argc, argv);
+  count_total_cut_of_part(argc, argv);
 
   int rv, times, verbosity;
   size_t nargs;
