@@ -1136,6 +1136,9 @@ static vtx_type S_coarsen_match_RM(
     vtx_type * const * const gmatch, 
     vtx_type * const fcmap) 
 {
+  ctrl->maxewgt = 1;
+  ctrl->avgewgt = 1;
+
   int unsigned seed;
   vtx_type i, pi, k, maxidx, last_unmatched, lvtx, gvtx, cnvtxs;
   adj_type j, start;
@@ -1367,6 +1370,9 @@ static vtx_type S_coarsen_match_SHEM(
   vtx_type * degree_ofst;
   vtx_type * perm_r_ofst;
 
+  wgt_type maxewgt = 0;
+  wgt_type avgewgt = 0;
+
   /* matching vectors */
 
   k = 0;
@@ -1527,6 +1533,9 @@ static vtx_type S_coarsen_match_SHEM(
         } else {
           /* Find a heavy-edge matching, subject to maxvwgt constraints */
           for (j=xadj[i]; j<xadj[i+1]; ++j) {
+            dl_storemax(maxewgt,adjwgt_ofst[j]);
+            avgewgt += adjwgt_ofst[j];
+
             k = adjncy_ofst[j];
             ewgt = adjwgt_ofst[j];
             if (k < mynvtxs) {
@@ -1582,6 +1591,14 @@ static vtx_type S_coarsen_match_SHEM(
     fclose(adjwgt_dump);
   }
 
+  dlthread_barrier(ctrl->comm);
+
+  wgt_dlthread_maxareduce(&maxewgt, 1, ctrl->comm);
+  wgt_dlthread_sumareduce(&avgewgt, 1, ctrl->comm);
+  if (myid == 0) {
+    ctrl->maxewgt = maxewgt;
+    ctrl->avgewgt = avgewgt / adj_sum(graph->mynedges,graph->dist.nthreads);
+  }
   dlthread_barrier(ctrl->comm);
 
   gcmap[myid] = perm;     // this array is reused later. Thanks a ton to ASAN!

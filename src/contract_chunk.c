@@ -407,7 +407,7 @@ static void S_par_contract_CLS_quadratic(
             if (gvtx_to_tid(k,cdist) == myid) {
               k = gvtx_to_lvtx(k,cdist);
             }
-          if ((v + gk) % 2 == 1) continue;  // simply drop
+          // if ((v + gk) % 2 == 1) continue;  // simply drop
             if (k == c || k == cg) {
               /* internal edge */
             } else {
@@ -427,7 +427,6 @@ static void S_par_contract_CLS_quadratic(
                 // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
-                adjwgt_sum += ewgt;
                 if (dense) {
                   table[k] = cnedges;
                 } else {
@@ -438,7 +437,6 @@ static void S_par_contract_CLS_quadratic(
               } else {      // hash collision or duplicate edge
                 if (dense) {
                   pcadjwgt[i] += ewgt;
-                  adjwgt_sum += ewgt;
                 } else {
                   // maybe hash collision? check edge list
                   i += start;
@@ -446,7 +444,6 @@ static void S_par_contract_CLS_quadratic(
                   for (jj=i;jj<cnedges;++jj) {
                     if (pcadjncy[jj] == k) {
                       pcadjwgt[jj] += ewgt;
-                      adjwgt_sum += ewgt;
                       break;
                     }
                   }
@@ -456,7 +453,6 @@ static void S_par_contract_CLS_quadratic(
                     // OPTIMIZE: reduce buffer size and call fwrite here
                     pcadjncy[cnedges] = k;
                     pcadjwgt[cnedges] = ewgt;
-                    adjwgt_sum += ewgt;
                     ++cnedges;
                   }
                   // }
@@ -487,6 +483,23 @@ static void S_par_contract_CLS_quadratic(
             htable[l] = NULL_OFFSET;
           }
         }
+
+        /* Drop Edges */
+        // remove edges with very little weight
+        k = mycxadj[c];
+        for (j = mycxadj[c]; j < cnedges; ++j) {
+          // if (pcadjwgt[j] >= ctrl->avgewgt) {
+          if (pcadjwgt[j] >= ctrl->maxewgt / 4) {
+            // keep
+            pcadjncy[k] = pcadjncy[j];
+            pcadjwgt[k] = pcadjwgt[j];
+            adjwgt_sum += pcadjwgt[k];
+            ++k;
+          } else {
+            // drop
+          }
+        }
+        cnedges = k;
 
         mycxadj[c+1] = cnedges;
 
@@ -838,7 +851,7 @@ static void S_par_contract_CLS_random_read(
           if (gvtx_to_tid(k,cdist) == myid) {
             k = gvtx_to_lvtx(k,cdist);
           }
-          if ((v + gk) % 2 == 1) continue;  // simply drop
+          // if ((v + gk) % 2 == 1) continue;  // simply drop
           if (k == c || k == cg) {
             /* internal edge */
           } else {
@@ -858,7 +871,6 @@ static void S_par_contract_CLS_random_read(
               // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
               pcadjncy[cnedges] = k;
               pcadjwgt[cnedges] = ewgt;
-              adjwgt_sum += ewgt;
               if (dense) {
                 table[k] = cnedges;
               } else {
@@ -869,7 +881,6 @@ static void S_par_contract_CLS_random_read(
             } else {      // hash collision or duplicate edge
               if (dense) {
                 pcadjwgt[i] += ewgt;
-                adjwgt_sum += ewgt;
               } else {
                 // maybe hash collision? check edge list
                 i += start;
@@ -877,7 +888,6 @@ static void S_par_contract_CLS_random_read(
                 for (jj=i;jj<cnedges;++jj) {
                   if (pcadjncy[jj] == k) {
                     pcadjwgt[jj] += ewgt;
-                    adjwgt_sum += ewgt;
                     break;
                   }
                 }
@@ -887,7 +897,6 @@ static void S_par_contract_CLS_random_read(
                   // OPTIMIZE: reduce buffer size and call fwrite here
                   pcadjncy[cnedges] = k;
                   pcadjwgt[cnedges] = ewgt;
-                  adjwgt_sum += ewgt;
                   ++cnedges;
                 }
                   // }
@@ -918,6 +927,23 @@ static void S_par_contract_CLS_random_read(
           htable[l] = NULL_OFFSET;
         }
       }
+
+      /* Drop Edges */
+      // remove edges with very little weight
+      k = mycxadj[c];
+      for (j = mycxadj[c]; j < cnedges; ++j) {
+        // if (pcadjwgt[j] >= ctrl->avgewgt) {
+        if (pcadjwgt[j] >= ctrl->maxewgt / 4) {
+          // keep
+          pcadjncy[k] = pcadjncy[j];
+          pcadjwgt[k] = pcadjwgt[j];
+          adjwgt_sum += pcadjwgt[k];
+          ++k;
+        } else {
+          // drop
+        }
+      }
+      cnedges = k;
 
       mycxadj[c+1] = cnedges;
     } // end current coarse node c

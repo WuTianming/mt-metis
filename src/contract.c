@@ -261,7 +261,7 @@ static void S_par_contract_DENSE(
         if (gvtx_to_tid(k,cdist) == myid) {
           k = gvtx_to_lvtx(k,cdist);
         } // k is now the canonical expression of the coarse vertex that j leads to
-        if ((v + gk) % 2 == 1) continue;  // simply drop
+        // if ((v + gk) % 2 == 1) continue;  // simply drop
         if (k == c || k == cg) {
           /* internal edge */
         } else {
@@ -293,6 +293,22 @@ static void S_par_contract_DENSE(
       k = mycadjncy[j];     // an std::unordered_map would be perfect here...
       table[k] = NULL_ADJ;
     }
+
+    /* Drop Edges */
+    // remove edges with very little weight
+    k = mycxadj[c];
+    for (j = mycxadj[c];j < cnedges; ++j) {
+      // if (mycadjwgt[j] >= ctrl->avgewgt) {
+      if (mycadjwgt[j] >= ctrl->maxewgt / 4) {
+        // keep
+        mycadjncy[k] = mycadjncy[j];
+        mycadjwgt[k] = mycadjwgt[j];
+        ++k;
+      } else {
+        // drop
+      }
+    }
+    cnedges = k;
 
     mycxadj[c+1] = cnedges;
   }
@@ -442,7 +458,7 @@ static void S_par_contract_CLS(
         if (gvtx_to_tid(k,dist) == myid) {
           k = gvtx_to_lvtx(k,dist);
         }
-        if ((v + gk) % 2 == 1) continue;  // simply drop
+        // if ((v + gk) % 2 == 1) continue;  // simply drop
         if (k == c || k == cg) {
           /* internal edge */
         } else {
@@ -488,6 +504,22 @@ static void S_par_contract_CLS(
       l = (k&MASK);
       htable[l] = NULL_OFFSET;
     }
+
+    /* Drop Edges */
+    // remove edges with very little weight
+    k = mycxadj[c];
+    for (j = mycxadj[c];j < cnedges; ++j) {
+      // if (mycadjwgt[j] >= ctrl->avgewgt) {
+      if (mycadjwgt[j] >= ctrl->maxewgt / 4) {
+        // keep
+        mycadjncy[k] = mycadjncy[j];
+        mycadjwgt[k] = mycadjwgt[j];
+        ++k;
+      } else {
+        // drop
+      }
+    }
+    cnedges = k;
 
     mycxadj[c+1] = cnedges;
   }

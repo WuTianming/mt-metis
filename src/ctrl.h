@@ -78,6 +78,8 @@ typedef struct ctrl_type {
   int ondisk;
   vtx_type coarsen_to;
   wgt_type * maxvwgt;  /* max vertex weight for each balance constraint */
+  wgt_type maxewgt;  // max edge weight
+  wgt_type avgewgt;
   double stopratio;
   /* initial partitiong parameters */
   size_t ninitsolutions;
