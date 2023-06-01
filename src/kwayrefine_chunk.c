@@ -474,6 +474,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
     size_t const niter, 
     kwinfo_type * const kwinfo)
 {
+  if (graph->level % 3 != 0) {
+    return 0;
+  }
+
   int ncon = graph->ncon;
 
   vtx_type c, i, k, nmoved;
@@ -791,9 +795,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
       break;
     }
 
-    // if (total_improvement_for_all_chunks * 2000 < graph->mincut) {
-    //   break;
-    // }
+    if (total_improvement_for_all_chunks * 300 < graph->mincut) {
+      break;
+    }
   } /* end passes */
 
   dl_free(cperm);

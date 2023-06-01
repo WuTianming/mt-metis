@@ -260,7 +260,8 @@ void ctrl_setup(
       // the original `coarsen_to` parameter:
       // ctrl->coarsen_to = dl_max(nvtxs/(20*pid_uplog2(nparts)),1000*nparts);
 
-      ctrl->coarsen_to = 1000*nparts;    // make sure initpart only needs to handle small graphs, reducing memory usage
+      // ctrl->coarsen_to = 1000*nparts;    // make sure initpart only needs to handle small graphs, reducing memory usage
+      ctrl->coarsen_to = 5000;
       printf(">>> coarsen_to = %"PF_VTX_T"; ratio = %lf\n", ctrl->coarsen_to, (double)(20*pid_uplog2(nparts)));
       break;
     case MTMETIS_PTYPE_ND:

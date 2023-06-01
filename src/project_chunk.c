@@ -42,6 +42,7 @@ static void S_project_kway(
   adj_type j, l, istart, iend;
   pid_type mepart, otherpart, na;
   wgt_type tid, ted;
+  wgt_type mincut;
   kwnbrinfo_type * myrinfo;
   adjinfo_type * mynbrs;
   vtx_type * id, * ed;
@@ -100,6 +101,7 @@ static void S_project_kway(
     myrinfo->nbrstart = NULL_ADJ;
   }
 
+  mincut = 0;
   bnd = kwinfo->bnd = vtx_iset_create(0,mynvtxs);
 
   htable = pid_init_alloc(NULL_PID,nparts);
@@ -187,6 +189,7 @@ static void S_project_kway(
       }
       myrinfo->id = tid;
       myrinfo->ed = ted;
+      mincut += myrinfo->ed;
 
       if (ted > 0) {
         if (is_bnd(tid,ted,greedy)) {
@@ -212,6 +215,13 @@ static void S_project_kway(
   if (!single_chunk) {
     fclose(adjncy_read);
     fclose(adjwgt_read);
+  }
+
+  mincut = wgt_dlthread_sumreduce(mincut,ctrl->comm);
+
+  dlthread_barrier(ctrl->comm);
+  if (myid == 0) {
+    graph->mincut = mincut/2;
   }
 
   DL_ASSERT((dlthread_barrier(ctrl->comm),check_kwinfo(kwinfo,graph, \

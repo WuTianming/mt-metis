@@ -201,6 +201,8 @@ static void S_par_contract_CLS_quadratic(
     dense = 1;
   }
 
+  // int thresh = maxdeg / 4 + 1;
+
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.contraction));
   }
@@ -400,10 +402,12 @@ static void S_par_contract_CLS_quadratic(
               t = gvtx_to_tid(k,graph->dist);
               k = gvtx_to_lvtx(k,graph->dist);
             }
+            vtx_type gk = k;
             k = gcmap[t][k];      // now k is coarse vertex that j leads to
             if (gvtx_to_tid(k,cdist) == myid) {
               k = gvtx_to_lvtx(k,cdist);
             }
+          if ((v + gk) % 2 == 1) continue;  // simply drop
             if (k == c || k == cg) {
               /* internal edge */
             } else {
@@ -420,6 +424,7 @@ static void S_par_contract_CLS_quadratic(
                 // TODO because this is filled sequentially, we can just call
                 // fwrite without manually buffering with `mycadjncy`
                 // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
+                // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 adjwgt_sum += ewgt;
@@ -429,6 +434,7 @@ static void S_par_contract_CLS_quadratic(
                   htable[l] = (offset_type)(cnedges - start); 
                 }
                 ++cnedges;  // NOTE: this is filled sequentially too
+                // }
               } else {      // hash collision or duplicate edge
                 if (dense) {
                   pcadjwgt[i] += ewgt;
@@ -444,6 +450,7 @@ static void S_par_contract_CLS_quadratic(
                       break;
                     }
                   }
+                  // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                   if (jj == cnedges) {
                     /* we didn't find the edge, so add it */
                     // OPTIMIZE: reduce buffer size and call fwrite here
@@ -452,6 +459,7 @@ static void S_par_contract_CLS_quadratic(
                     adjwgt_sum += ewgt;
                     ++cnedges;
                   }
+                  // }
                 }
               }
             }
@@ -676,6 +684,8 @@ static void S_par_contract_CLS_random_read(
     dense = 1;
   }
 
+  // int thresh = maxdeg / 4 + 1;
+
   if (myid == 0) {
     dl_start_timer(&(ctrl->timers.contraction));
   }
@@ -823,10 +833,12 @@ static void S_par_contract_CLS_random_read(
             t = gvtx_to_tid(k,graph->dist);
             k = gvtx_to_lvtx(k,graph->dist);
           }
+          vtx_type gk = k;
           k = gcmap[t][k];      // now k is coarse vertex that j leads to
           if (gvtx_to_tid(k,cdist) == myid) {
             k = gvtx_to_lvtx(k,cdist);
           }
+          if ((v + gk) % 2 == 1) continue;  // simply drop
           if (k == c || k == cg) {
             /* internal edge */
           } else {
@@ -843,6 +855,7 @@ static void S_par_contract_CLS_random_read(
               // TODO because this is filled sequentially, we can just call
               // fwrite without manually buffering with `mycadjncy`
               // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
+              // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
               pcadjncy[cnedges] = k;
               pcadjwgt[cnedges] = ewgt;
               adjwgt_sum += ewgt;
@@ -852,6 +865,7 @@ static void S_par_contract_CLS_random_read(
                 htable[l] = (offset_type)(cnedges - start); 
               }
               ++cnedges;  // NOTE: this is filled sequentially too
+              // }
             } else {      // hash collision or duplicate edge
               if (dense) {
                 pcadjwgt[i] += ewgt;
@@ -867,6 +881,7 @@ static void S_par_contract_CLS_random_read(
                     break;
                   }
                 }
+                  // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                 if (jj == cnedges) {
                   /* we didn't find the edge, so add it */
                   // OPTIMIZE: reduce buffer size and call fwrite here
@@ -875,6 +890,7 @@ static void S_par_contract_CLS_random_read(
                   adjwgt_sum += ewgt;
                   ++cnedges;
                 }
+                  // }
               }
             }
           }

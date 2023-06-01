@@ -349,7 +349,6 @@ static double * S_parse_args(
 }
 
 /* calculate statistics to show if edge count is balanced */
-/* NOTE: this shouldn't be included in a git commit */
 void count_total_deg_of_part(int argc, char ** argv) {
   vtx_type nvtxs, i;
   adj_type * xadj = NULL; vtx_type * adjncy = NULL;
@@ -388,6 +387,65 @@ void count_total_deg_of_part(int argc, char ** argv) {
   printf("max/avg = %.3lf\n", mx / avg);
 
 #undef DEG
+
+  exit(0);
+}
+
+int read_binary_dataset(
+    char const * const prefix, vtx_type * const r_nvtxs, int * const r_ncon,
+    adj_type ** const r_xadj, vtx_type ** const r_adjncy, wgt_type ** const r_vwgt,
+    wgt_type ** const r_adjwgt, int usemmap);
+
+/* check if cut edges is correct */
+void count_total_cut_of_part(int argc, char ** argv) {
+  vtx_type nvtxs, i;
+  int ncon;
+  adj_type * xadj = NULL; vtx_type * adjncy = NULL;
+  wgt_type * vwgt = NULL, * adjwgt = NULL;
+
+  char const * input_file = NULL, * input_parts = NULL;
+  input_file = argv[1];
+  printf("reading input graph file %s...\n", input_file);
+  // int rv = wildriver_read_graph(input_file,&nvtxs,NULL,NULL,NULL,&xadj,&adjncy,&vwgt,&adjwgt);
+  int rv = read_binary_dataset(input_file, &nvtxs, &ncon, &xadj, &adjncy, &vwgt, &adjwgt, 1);
+  printf("stats: nvtxs = %"PF_VTX_T"\n", nvtxs);
+
+  input_parts = argv[2];
+  printf("reading input parts file %s...\n", input_parts);
+  FILE *fparts = fopen(input_parts, "r");
+
+  adj_type total_edges[8], external_edges[8];
+  short * part = (short *)malloc(sizeof(short) * nvtxs);
+  memset(total_edges, 0, sizeof(total_edges));
+  memset(external_edges, 0, sizeof(total_edges));
+
+  for (size_t i = 0; i < nvtxs; ++i) {
+    fscanf(fparts, "%hd", &part[i]);
+  }
+  fclose(fparts);
+
+  for (size_t i = 0; i < nvtxs; ++i) {
+    total_edges[part[i]] += (xadj[i+1] - xadj[i]);
+    for (adj_type j = xadj[i]; j < xadj[i+1]; ++j) {
+      if (part[i] != part[adjncy[j]]) {
+        ++external_edges[part[i]];
+      }
+    }
+  }
+
+  for (int i = 0; i < 8; ++i) {
+    printf("part %d: %lld/%lld\n", i, external_edges[i], total_edges[i]);
+  }
+
+  adj_type sum = 0, sum_ext = 0;
+
+  for (int i = 0; i < 8; ++i) {
+    sum += total_edges[i];
+    sum_ext += external_edges[i];
+  }
+
+  printf("total: %lld/%lld\n", sum_ext, sum);
+  printf("total: %lld/%lld, %.2lf%%\n", sum_ext/2, sum/2, 1.00 * sum_ext / sum);
 
   exit(0);
 }
@@ -480,6 +538,7 @@ int main(
     char ** argv) 
 {
   // count_total_deg_of_part(argc, argv);
+  // count_total_cut_of_part(argc, argv);
 
   int rv, times, verbosity;
   size_t nargs;

@@ -235,10 +235,10 @@ vtx_type par_refine_chunk_graph(
         // NOTE: kwinfo is empty <==> the graph is the initial partition.
         // hence we can spare the effort to make it support multiple chunks
 
-        if (myid == 0)
-          for (int i = 0; i < ctrl->nthreads; ++i)
-            if (graph->chunkcnt[i] > 1)
-              dl_error("The initial partition is not single-chunk -- aborting.\n");
+        // if (myid == 0)
+        //   for (int i = 0; i < ctrl->nthreads; ++i)
+        //     if (graph->chunkcnt[i] > 1)
+        //       dl_error("The initial partition is not single-chunk -- aborting.\n");
         dlthread_barrier(ctrl->comm);
 
         S_partparams_kway(ctrl,graph);

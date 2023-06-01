@@ -1485,7 +1485,7 @@ static vtx_type S_coarsen_match_SHEM(
 
     if (myid == 0) {
       fprintf(stderr, "avgdeg = %4d; ", (int)avgdegree);
-      for (pi=0; pi<chunknvtxs;pi += chunknvtxs / 10) {
+      for (pi=0; pi<chunknvtxs;pi += (chunknvtxs-1) / 10 + 1) {
         i = perm_r_ofst[pi];
         fprintf(stderr, " %4d", (int)(xadj[i+1]-xadj[i]));
       }
@@ -1613,7 +1613,7 @@ static vtx_type S_coarsen_cluster_FC(
 {
   exit(1);
 
-#if 0
+// #if 0
   unsigned int seed;
   vtx_type v, i, k, l, cl, cg, maxidx, mycnvtxs, maxdeg, last_unmatched, \
       collapsed;
@@ -1821,7 +1821,7 @@ static vtx_type S_coarsen_cluster_FC(
   }
 
   return mycnvtxs;
-#endif
+// #endif
 }
 
 

@@ -256,11 +256,12 @@ static void S_par_contract_DENSE(
           t = gvtx_to_tid(k,graph->dist);
           k = gvtx_to_lvtx(k,graph->dist);
         } // edge: (v in o) -> (k in t)
+        vtx_type gk = k;
         k = gcmap[t][k];
         if (gvtx_to_tid(k,cdist) == myid) {
           k = gvtx_to_lvtx(k,cdist);
         } // k is now the canonical expression of the coarse vertex that j leads to
-
+        if ((v + gk) % 2 == 1) continue;  // simply drop
         if (k == c || k == cg) {
           /* internal edge */
         } else {
@@ -436,10 +437,12 @@ static void S_par_contract_CLS(
           t = gvtx_to_tid(k,graph->dist);
           k = gvtx_to_lvtx(k,graph->dist);
         }
+        vtx_type gk = k;
         k = gcmap[t][k];
         if (gvtx_to_tid(k,dist) == myid) {
           k = gvtx_to_lvtx(k,dist);
         }
+        if ((v + gk) % 2 == 1) continue;  // simply drop
         if (k == c || k == cg) {
           /* internal edge */
         } else {
