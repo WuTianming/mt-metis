@@ -294,7 +294,8 @@ static void S_par_contract_DENSE(
       table[k] = NULL_ADJ;
     }
 
-    /* Drop Edges */
+/*
+    // Drop Edges
     // remove edges with very little weight
     k = mycxadj[c];
     for (j = mycxadj[c];j < cnedges; ++j) {
@@ -309,6 +310,7 @@ static void S_par_contract_DENSE(
       }
     }
     cnedges = k;
+*/
 
     mycxadj[c+1] = cnedges;
   }
@@ -505,7 +507,8 @@ static void S_par_contract_CLS(
       htable[l] = NULL_OFFSET;
     }
 
-    /* Drop Edges */
+/*
+    // Drop Edges
     // remove edges with very little weight
     k = mycxadj[c];
     for (j = mycxadj[c];j < cnedges; ++j) {
@@ -520,6 +523,7 @@ static void S_par_contract_CLS(
       }
     }
     cnedges = k;
+*/
 
     mycxadj[c+1] = cnedges;
   }

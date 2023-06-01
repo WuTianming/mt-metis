@@ -484,7 +484,8 @@ static void S_par_contract_CLS_quadratic(
           }
         }
 
-        /* Drop Edges */
+/*
+        // Drop Edges
         // remove edges with very little weight
         k = mycxadj[c];
         for (j = mycxadj[c]; j < cnedges; ++j) {
@@ -500,6 +501,7 @@ static void S_par_contract_CLS_quadratic(
           }
         }
         cnedges = k;
+*/
 
         mycxadj[c+1] = cnedges;
 
@@ -928,7 +930,8 @@ static void S_par_contract_CLS_random_read(
         }
       }
 
-      /* Drop Edges */
+/*
+      // Drop Edges
       // remove edges with very little weight
       k = mycxadj[c];
       for (j = mycxadj[c]; j < cnedges; ++j) {
@@ -944,6 +947,7 @@ static void S_par_contract_CLS_random_read(
         }
       }
       cnedges = k;
+*/
 
       mycxadj[c+1] = cnedges;
     } // end current coarse node c
