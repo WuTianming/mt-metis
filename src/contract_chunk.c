@@ -14,6 +14,7 @@
 
 
 
+#define _GNU_SOURCE
 #include "contract.h"
 #include "check.h"
 
@@ -633,7 +634,13 @@ static void S_par_contract_CLS_quadratic(
 /**
  * the idea is: SSDs can handle concurrent random reads.
  * try to exploit random reads to reduce useless disk read
+ * 
+ * update: now use io_uring to do prefetch
 */
+
+// everything in the mixin file is static to the current file
+#include "uring_mixin.c"
+
 static void S_par_contract_CLS_random_read(
     ctrl_type * const ctrl, 
     graph_type * const graph, 
@@ -686,9 +693,6 @@ static void S_par_contract_CLS_random_read(
     cnedges += l;
   }
 
-  vtx_type * tmpadj = vtx_alloc(maxdeg);
-  vtx_type * tmpwgt = wgt_alloc(maxdeg);
-
   size_t maxchunkcnt = graph->chunkcnt[myid];
   for (tid_type t = 0; t < dlthread_get_nthreads(graph->comm); ++t) {
     dl_storemax(maxchunkcnt, graph->chunkcnt[t]);
@@ -719,6 +723,7 @@ static void S_par_contract_CLS_random_read(
           ? gxadj[myid][gchunkofst[myid][1]] * 2
           : ctrl->adjchunksize;
 
+  /* where to write the coarse graph */
   vtx_type * const mycadjncy = cgraph->adjncy[myid] = vtx_alloc(adjncy_chunksize);
   wgt_type * const mycadjwgt = cgraph->adjwgt[myid] = wgt_alloc(adjncy_chunksize);
 
@@ -745,15 +750,34 @@ static void S_par_contract_CLS_random_read(
   DL_ASSERT(cadjncy_dump != NULL, "open cadjncy file");
   DL_ASSERT(cadjwgt_dump != NULL, "open cadjwgt file");
 
+  struct pagecacher *dadjncy_uring = malloc(sizeof(struct pagecacher) * nthreads);
+  struct pagecacher *dadjwgt_uring = malloc(sizeof(struct pagecacher) * nthreads);
+
   FILE **dadjncy_read, **dadjwgt_read;    // each thread reads from all files
   dadjncy_read = malloc(sizeof(FILE *) * nthreads);
   dadjwgt_read = malloc(sizeof(FILE *) * nthreads);
+  // adj_type pagesize = 128*1024/8;
+  adj_type pagesize = 16*1024/8;
   {
     char fin1[1024], fin2[1024];
     for (int id = 0; id < nthreads; ++id) {
+      // TODO: need to open the file in binary & direct IO mode
+      // TODO: 简单写！每个进程都打开所有文件，然后每个进程读取自己的文件
       sprintf(fin1, "dump_graph%zu_dadjncy_tid%"PF_TID_T".bin", graph->level, id);
       sprintf(fin2, "dump_graph%zu_dadjwgt_tid%"PF_TID_T".bin", graph->level, id);
-      FILE *fadjncy = fopen(fin1, "rb");
+      int fdadjncy = open(fin1, O_RDONLY | O_DIRECT);
+      int fdadjwgt = open(fin2, O_RDONLY | O_DIRECT);
+      DL_ASSERT(fdadjncy != -1, "open dadjncy file");
+      DL_ASSERT(fdadjwgt != -1, "open dadjwgt file");
+      adj_type capacity = maxdeg * 10 / pagesize + 1;
+      if (ctrl->adjchunksize / nthreads / pagesize + 1 > capacity)
+        capacity = ctrl->adjchunksize / nthreads / pagesize + 1;
+
+      // call the contructor
+      PageCacher(dadjncy_uring + id, capacity, graph->mynedges[id], pagesize, fdadjncy);
+      PageCacher(dadjwgt_uring + id, capacity, graph->mynedges[id], pagesize, fdadjwgt);
+
+      FILE *fadjncy = fopen(fin1, "rb");  // a separate file descriptor
       FILE *fadjwgt = fopen(fin2, "rb");
       DL_ASSERT(fadjncy != NULL, "open dadjncy file");
       DL_ASSERT(fadjwgt != NULL, "open dadjwgt file");
@@ -781,16 +805,17 @@ static void S_par_contract_CLS_random_read(
 
     // start where we left off at coarse idx = c
     for (;c<mycnvtxs;++c) {
+      v = fcmap[c];
+      if (v >= cc1end) {  // I'm done with the cc1 chunk
+        break;
+      }
+
       cg = lvtx_to_gvtx(c,myid,cdist);
       /* initialize the coarse vertex */
       for (t = 0; t < ncon; ++t) {
         mycvwgt[c * ncon + t] = 0;
       }
 
-      v = fcmap[c];       // this is guaranteed to be thread local!
-      if (v >= cc1end) {  // I'm done with the cc1 chunk
-        break;
-      }
       o = myid;
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
 
@@ -800,14 +825,39 @@ static void S_par_contract_CLS_random_read(
         k = gvtx_to_lvtx(k, graph->dist);
       } // now (o,v) is paired to (t,k)
 
+      size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
+      size_t deg1 = gxadj[o][v+1] - gxadj[o][v],
+             deg2 = gxadj[t][k+1] - gxadj[t][k];
+
+      vtx_type oo = t, ov = k;
+
       DL_ASSERT_EQUALS(gcmap[o][v],gcmap[t][k],"%"PF_VTX_T);
       DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[t][k],cdist),"%"PF_VTX_T);
       DL_ASSERT_EQUALS(myid,gvtx_to_tid(lvtx_to_gvtx(v,myid,graph->dist), graph->dist),"%"PF_TID_T);
 
-      /* check if the chunk length reaches maximum */
-      size_t chunkadjs = cnedges - mycxadj[mycchunkofst[*pchunkcnt-1]];
-      size_t deg1 = gxadj[o][v+1] - gxadj[o][v],
-             deg2 = gxadj[t][k+1] - gxadj[t][k];
+      // do prefetch by pre-calculating the paired vertex for coarse nodes ahead
+      int prefetch_depth = 64;
+      for (int i=0; i<prefetch_depth; ++i) {
+        vtx_type cc = c + i;
+        if (cc >= mycnvtxs) {
+          break;
+        }
+        vtx_type vv = fcmap[cc];
+        vtx_type kk = gmatch[myid][vv];
+        tid_type tt = myid;
+        if (kk >= graph->mynvtxs[myid]) {
+          tt = gvtx_to_tid(kk, graph->dist);
+          kk = gvtx_to_lvtx(kk, graph->dist);
+        } // now (myid,vv) is paired to (tt,kk)
+        adj_type start = gxadj[tt][kk];
+        adj_type end = gxadj[tt][kk+1];
+        for (int64_t p=start/pagesize; p<=(end-1)/pagesize; p++) {
+          prefetch_page(dadjncy_uring + tt, p, false);
+          prefetch_page(dadjwgt_uring + tt, p, false);
+        }
+      }
+
+      /* check if the output chunk length reaches maximum */
       if (chunkadjs + deg1 + deg2 >= ctrl->adjchunksize) {
         mycchunkofst[*pchunkcnt] = c;
         ++*pchunkcnt;
@@ -815,47 +865,118 @@ static void S_par_contract_CLS_random_read(
         fwrite(mycadjwgt, sizeof(wgt_type), chunkadjs, cadjwgt_dump);
       }
 
-      adj_type adjstart, adjend;
-      adjstart = gxadj[t][k], adjend = gxadj[t][k+1];
-      fseek(dadjncy_read[t], sizeof(vtx_type) * adjstart, SEEK_SET);
-      fseek(dadjwgt_read[t], sizeof(wgt_type) * adjstart, SEEK_SET);
-      fread(tmpadj, sizeof(vtx_type), adjend - adjstart, dadjncy_read[t]);
-      fread(tmpwgt, sizeof(wgt_type), adjend - adjstart, dadjwgt_read[t]);
-
       start = cnedges;
 
       vtx_type * pcadjncy = mycadjncy - mycxadj[mycchunkofst[*pchunkcnt-1]];
       wgt_type * pcadjwgt = mycadjwgt - mycxadj[mycchunkofst[*pchunkcnt-1]];
 
-      int ttt = 0;
-      do {
-        ++ttt;
-        DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
-        vtx_type const * const padjncy = (ttt==1 ? gadjncy[o] - cc1adjstart : tmpadj - adjstart);
-        wgt_type const * const padjwgt = (ttt==1 ? gadjwgt[o] - cc1adjstart : tmpwgt - adjstart);
+      DL_ASSERT_EQUALS(c,gvtx_to_lvtx(gcmap[o][v],cdist),"%"PF_VTX_T);
+      vtx_type const * const padjncy = gadjncy[o] - cc1adjstart;
+      wgt_type const * const padjwgt = gadjwgt[o] - cc1adjstart;
 
-        /* transfer over vertex stuff from v and u */
+      /* transfer over vertex stuff from v */
+      for (t = 0; t < ncon; ++t) {
+        mycvwgt[c * ncon + t] += gvwgt[o][v * ncon + t];
+      }
+
+      // explore other coarse vertices that current coarse vertex is connected to
+      for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
+        k = padjncy[j];
+        if (k < graph->mynvtxs[o]) {
+          t = o;
+        } else {
+          t = gvtx_to_tid(k,graph->dist);
+          k = gvtx_to_lvtx(k,graph->dist);
+        } // get (t,k) pair
+        k = gcmap[t][k]; // use k to refer to the adjacent coarse vertex
+        if (gvtx_to_tid(k,cdist) == myid) {
+          k = gvtx_to_lvtx(k,cdist);
+        }
+        if (k == c || k == cg) {
+          /* internal edge (the edge will be discarded) */
+        } else {
+          /* external edge */
+          if (dense) {
+            i = table[k];
+          } else {
+            l = k&MASK;
+            i = htable[l];
+          }
+          ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
+          if ((dense && i == NULL_ADJ) || (!dense && i == NULL_OFFSET)) {
+            /* new edge */
+            pcadjncy[cnedges] = k;
+            pcadjwgt[cnedges] = ewgt;
+            if (dense) {
+              table[k] = cnedges;
+            } else {
+              htable[l] = (offset_type)(cnedges - start); 
+            }
+            ++cnedges;
+          } else {      // hash collision or duplicate edge
+            if (dense) {
+              pcadjwgt[i] += ewgt;
+            } else { // maybe hash collision? check edge list
+              i += start;
+              /* search for existing edge */
+              for (jj=i;jj<cnedges;++jj) {
+                if (pcadjncy[jj] == k) {
+                  pcadjwgt[jj] += ewgt;
+                  break;
+                }
+              }
+              if (jj == cnedges) {
+                /* we didn't find the edge, so add it */
+                pcadjncy[cnedges] = k;
+                pcadjwgt[cnedges] = ewgt;
+                ++cnedges;
+              }
+            }
+          }
+        }
+      }
+
+      if (o == oo && v == ov) {
+        // self-loop
+        // do nothing
+        adj_type adjstart, adjend;
+        adjstart = gxadj[oo][ov], adjend = gxadj[oo][ov+1];
+
+        for (int64_t p=adjstart/pagesize; p<=(adjend-1)/pagesize; p++) {
+          discard_page(dadjncy_uring + oo, p);
+          discard_page(dadjwgt_uring + oo, p);
+        }
+      } else {
+        adj_type adjstart, adjend;
+        adjstart = gxadj[oo][ov], adjend = gxadj[oo][ov+1];
+
+        for (int64_t p=adjstart/pagesize; p<=(adjend-1)/pagesize; p++) {
+          fetch_page(dadjncy_uring + oo, p);
+          fetch_page(dadjwgt_uring + oo, p);
+        }
+
+        o = oo, v = ov;
+
+        /* transfer over vertex stuff from v */
         for (t = 0; t < ncon; ++t) {
           mycvwgt[c * ncon + t] += gvwgt[o][v * ncon + t];
         }
 
-        // explore other coarse vertices that current coarse vertex is connected to
+        // below is copied, only altering the way to access the edge list
         for (j=gxadj[o][v];j<gxadj[o][v+1];++j) {
-          k = padjncy[j];
+          k = dadjncy_uring[o].cached_pages[j/pagesize][j%pagesize];
           if (k < graph->mynvtxs[o]) {
             t = o;
           } else {
             t = gvtx_to_tid(k,graph->dist);
             k = gvtx_to_lvtx(k,graph->dist);
-          }
-          vtx_type gk = k;
-          k = gcmap[t][k];      // now k is coarse vertex that j leads to
+          } // get (t,k) pair
+          k = gcmap[t][k]; // use k to refer to the adjacent coarse vertex
           if (gvtx_to_tid(k,cdist) == myid) {
             k = gvtx_to_lvtx(k,cdist);
           }
-          // if ((v + gk) % 2 == 1) continue;  // simply drop
           if (k == c || k == cg) {
-            /* internal edge */
+            /* internal edge (the edge will be discarded) */
           } else {
             /* external edge */
             if (dense) {
@@ -864,13 +985,9 @@ static void S_par_contract_CLS_random_read(
               l = k&MASK;
               i = htable[l];
             }
-            ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
+            ewgt = graph->uniformadjwgt ? 1 : dadjwgt_uring[o].cached_pages[j/pagesize][j%pagesize];
             if ((dense && i == NULL_ADJ) || (!dense && i == NULL_OFFSET)) {
               /* new edge */
-              // TODO because this is filled sequentially, we can just call
-              // fwrite without manually buffering with `mycadjncy`
-              // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
-              // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
               pcadjncy[cnedges] = k;
               pcadjwgt[cnedges] = ewgt;
               if (dense) {
@@ -878,13 +995,11 @@ static void S_par_contract_CLS_random_read(
               } else {
                 htable[l] = (offset_type)(cnedges - start); 
               }
-              ++cnedges;  // NOTE: this is filled sequentially too
-              // }
+              ++cnedges;
             } else {      // hash collision or duplicate edge
               if (dense) {
                 pcadjwgt[i] += ewgt;
-              } else {
-                // maybe hash collision? check edge list
+              } else { // maybe hash collision? check edge list
                 i += start;
                 /* search for existing edge */
                 for (jj=i;jj<cnedges;++jj) {
@@ -893,26 +1008,22 @@ static void S_par_contract_CLS_random_read(
                     break;
                   }
                 }
-                  // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                 if (jj == cnedges) {
                   /* we didn't find the edge, so add it */
-                  // OPTIMIZE: reduce buffer size and call fwrite here
                   pcadjncy[cnedges] = k;
                   pcadjwgt[cnedges] = ewgt;
                   ++cnedges;
                 }
-                  // }
               }
             }
           }
         }
 
-        v = gmatch[o][v];
-        if (v >= graph->mynvtxs[o]) {
-          o = gvtx_to_tid(v,graph->dist);
-          v = gvtx_to_lvtx(v,graph->dist);
+        for (int64_t p=adjstart/pagesize; p<=(adjend-1)/pagesize; p++) {
+          discard_page(dadjncy_uring + oo, p);
+          discard_page(dadjwgt_uring + oo, p);
         }
-      } while (!(myid == o && v == fcmap[c]));
+      }
 
       /* clear the htable */
       if (dense) {
@@ -929,25 +1040,6 @@ static void S_par_contract_CLS_random_read(
           htable[l] = NULL_OFFSET;
         }
       }
-
-/*
-      // Drop Edges
-      // remove edges with very little weight
-      k = mycxadj[c];
-      for (j = mycxadj[c]; j < cnedges; ++j) {
-        // if (pcadjwgt[j] >= ctrl->avgewgt) {
-        if (pcadjwgt[j] >= ctrl->maxewgt / 4) {
-          // keep
-          pcadjncy[k] = pcadjncy[j];
-          pcadjwgt[k] = pcadjwgt[j];
-          adjwgt_sum += pcadjwgt[k];
-          ++k;
-        } else {
-          // drop
-        }
-      }
-      cnedges = k;
-*/
 
       mycxadj[c+1] = cnedges;
     } // end current coarse node c
@@ -971,11 +1063,10 @@ static void S_par_contract_CLS_random_read(
   fclose(cadjncy_dump); fclose(cadjwgt_dump);
   for (int i = 0; i < nthreads; i++) {
     fclose(dadjncy_read[i]); fclose(dadjwgt_read[i]);
+    PageCacher_Del(dadjncy_uring + i); PageCacher_Del(dadjwgt_uring + i);
   }
   free(dadjncy_read); free(dadjwgt_read);
-
-  dl_free(tmpadj);
-  dl_free(tmpwgt);
+  free(dadjncy_uring); free(dadjwgt_uring);
 
   if (dense) {
     dl_free(table);

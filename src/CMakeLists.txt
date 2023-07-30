@@ -34,7 +34,7 @@ add_executable(mtmetis_bin mtmetis_bin.c)
 set_target_properties(mtmetis_bin PROPERTIES OUTPUT_NAME mtmetis)
 add_dependencies(mtmetis_bin wildriver)
 add_dependencies(mtmetis_bin mtmetis)
-target_link_libraries(mtmetis_bin mtmetis wildriver ${REQ_LIBS})
+target_link_libraries(mtmetis_bin mtmetis wildriver uring ${REQ_LIBS})
 install(TARGETS mtmetis_bin
   RUNTIME DESTINATION bin
 )

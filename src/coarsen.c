@@ -113,6 +113,8 @@ graph_type * par_coarsen_graph(
 
     // the chunk structure is backward-compatible when there is only one chunk
     par_contract_graph(ctrl,graph,cnvtxs,(vtx_type const **)gmatch,fcmap);
+    // graph->coarser->free_adjncy = 1;
+    // graph->coarser->free_adjwgt = 1;
 
     {
       // manually maintain the chunk info structures
