@@ -129,6 +129,22 @@ static void S_adjust_cmap(
   }
 }
 
+struct fread_thread_data {
+  FILE *fp;
+  void *buffer;
+  size_t buffer_size;
+  size_t buffer_offset;
+};
+
+void *fread_thread(void *arg) {
+  // it's soooo stupid! I want lambdas...
+
+  struct fread_thread_data *data = (struct fread_thread_data *)arg;
+  fseek(data->fp, data->buffer_offset, SEEK_SET);
+  fread(data->buffer, 1, data->buffer_size, data->fp);
+  return NULL;
+}
+
 
 /**
  * @brief Perform contraction using a single hash table, performing a linear
@@ -168,8 +184,12 @@ static void S_par_contract_CLS_quadratic(
   vtx_type const * const * const gchunkofst = (vtx_type const **)graph->chunkofst;
   adj_type const * const * const gxadj = (adj_type const * const *)graph->xadj;
   wgt_type const * const * const gvwgt = (wgt_type const * const *)graph->vwgt;
-  vtx_type * const * const gadjncy = (vtx_type * const *)graph->adjncy;
-  wgt_type * const * const gadjwgt = (wgt_type * const *)graph->adjwgt;
+
+  vtx_type * * gadjncy = (vtx_type * *)graph->adjncy;   // the actual heap pointer may be redirected for rotating prefetch
+  wgt_type * * gadjwgt = (wgt_type * *)graph->adjwgt;
+
+  vtx_type *gadjncy_rot = vtx_alloc(ctrl->adjchunksize);
+  wgt_type *gadjwgt_rot = wgt_alloc(ctrl->adjchunksize);
 
   vtx_type const * const * const gcmap = (vtx_type const **)graph->cmap;
 
@@ -307,23 +327,53 @@ static void S_par_contract_CLS_quadratic(
         fprintf(stderr, "#%"PF_TID_T": this chunk is [%"PF_VTX_T", %"PF_VTX_T")\n", myid, cc1start, cc1end);
 #endif
 
+    vtx_type cc2start, cc2end;
+    adj_type cc2adjstart, cc2adjend;
+    cc2start = gchunkofst[myid][cc1], cc2end = gchunkofst[myid][cc1+1];
+    cc2adjstart = gxadj[myid][cc2start], cc2adjend = gxadj[myid][cc2end];
+
+    pthread_t read_thread[2];
+    struct fread_thread_data args[2];
+    args[0].buffer = gadjncy_rot;
+    args[0].buffer_offset = sizeof(vtx_type) * cc2adjstart;
+    args[0].buffer_size = sizeof(vtx_type) * (cc2adjend - cc2adjstart);
+    args[0].fp = dadjncy_read;
+    args[1].buffer = gadjwgt_rot;
+    args[1].buffer_offset = sizeof(wgt_type) * cc2adjstart;
+    args[1].buffer_size = sizeof(wgt_type) * (cc2adjend - cc2adjstart);
+    args[1].fp = dadjwgt_read;
+    pthread_create(read_thread+0, NULL, fread_thread, args+0);
+    pthread_create(read_thread+1, NULL, fread_thread, args+1);
+
     for (int cc2=cc1; cc2<maxchunkcnt; ++cc2) {
       dlthread_barrier(graph->comm);    // barrier every time before file read
 #ifdef PRINT_LOOP_VAR
       if (myid == 0) { fprintf(stderr, "chunk vector (%d,%d)\n", cc1, cc2); }
 #endif
-      vtx_type cc2start, cc2end;
-      adj_type cc2adjstart, cc2adjend;
       if (cc2 < gchunkcnt[myid]) {
-        cc2start = gchunkofst[myid][cc2], cc2end = gchunkofst[myid][cc2+1];
+        // join the threads for fread
+        pthread_join(read_thread[0], NULL);
+        pthread_join(read_thread[1], NULL);
+
+        void *tmp;
+        tmp = gadjncy_rot; gadjncy_rot = gadjncy[myid]; gadjncy[myid] = tmp;
+        tmp = gadjwgt_rot; gadjwgt_rot = gadjwgt[myid]; gadjwgt[myid] = tmp;
+      }
+
+      if (cc2+1 < gchunkcnt[myid]) {
+        // launch new threads to prefetch
+        cc2start = gchunkofst[myid][cc2+1], cc2end = gchunkofst[myid][cc2+2];
         cc2adjstart = gxadj[myid][cc2start], cc2adjend = gxadj[myid][cc2end];
-        fseek(dadjncy_read, sizeof(vtx_type) * cc2adjstart, SEEK_SET);
-        fseek(dadjwgt_read, sizeof(wgt_type) * cc2adjstart, SEEK_SET);
-        fread(gadjncy[myid], sizeof(vtx_type), cc2adjend - cc2adjstart, dadjncy_read);
-        fread(gadjwgt[myid], sizeof(wgt_type), cc2adjend - cc2adjstart, dadjwgt_read);  // this space is shared
-      } else {
-        /* in this stage, no one should ever try to read chunk #cc2 of this
-         * local thread. */
+        args[0].buffer = gadjncy_rot;
+        args[0].buffer_offset = sizeof(vtx_type) * cc2adjstart;
+        args[0].buffer_size = sizeof(vtx_type) * (cc2adjend - cc2adjstart);
+        args[0].fp = dadjncy_read;
+        args[1].buffer = gadjwgt_rot;
+        args[1].buffer_offset = sizeof(wgt_type) * cc2adjstart;
+        args[1].buffer_size = sizeof(wgt_type) * (cc2adjend - cc2adjstart);
+        args[1].fp = dadjwgt_read;
+        pthread_create(read_thread+0, NULL, fread_thread, args+0);
+        pthread_create(read_thread+1, NULL, fread_thread, args+1);
       }
 
       dlthread_barrier(ctrl->comm);   // sync all threads to finish the read
@@ -408,7 +458,6 @@ static void S_par_contract_CLS_quadratic(
             if (gvtx_to_tid(k,cdist) == myid) {
               k = gvtx_to_lvtx(k,cdist);
             }
-          // if ((v + gk) % 2 == 1) continue;  // simply drop
             if (k == c || k == cg) {
               /* internal edge */
             } else {
@@ -422,10 +471,6 @@ static void S_par_contract_CLS_quadratic(
               ewgt = graph->uniformadjwgt ? 1 : padjwgt[j];
               if ((dense && i == NULL_ADJ) || (!dense && i == NULL_OFFSET)) {
                 /* new edge */
-                // TODO because this is filled sequentially, we can just call
-                // fwrite without manually buffering with `mycadjncy`
-                // OPTIMIZE: we only need to store the edges of one cnode (for hash collision fallback)
-                // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                 pcadjncy[cnedges] = k;
                 pcadjwgt[cnedges] = ewgt;
                 if (dense) {
@@ -434,7 +479,6 @@ static void S_par_contract_CLS_quadratic(
                   htable[l] = (offset_type)(cnedges - start); 
                 }
                 ++cnedges;  // NOTE: this is filled sequentially too
-                // }
               } else {      // hash collision or duplicate edge
                 if (dense) {
                   pcadjwgt[i] += ewgt;
@@ -448,15 +492,12 @@ static void S_par_contract_CLS_quadratic(
                       break;
                     }
                   }
-                  // if (cnedges - mycxadj[c] <= thresh) {   // truncate edge list
                   if (jj == cnedges) {
                     /* we didn't find the edge, so add it */
-                    // OPTIMIZE: reduce buffer size and call fwrite here
                     pcadjncy[cnedges] = k;
                     pcadjwgt[cnedges] = ewgt;
                     ++cnedges;
                   }
-                  // }
                 }
               }
             }
@@ -485,25 +526,6 @@ static void S_par_contract_CLS_quadratic(
           }
         }
 
-/*
-        // Drop Edges
-        // remove edges with very little weight
-        k = mycxadj[c];
-        for (j = mycxadj[c]; j < cnedges; ++j) {
-          // if (pcadjwgt[j] >= ctrl->avgewgt) {
-          if (pcadjwgt[j] >= ctrl->maxewgt / 4) {
-            // keep
-            pcadjncy[k] = pcadjncy[j];
-            pcadjwgt[k] = pcadjwgt[j];
-            adjwgt_sum += pcadjwgt[k];
-            ++k;
-          } else {
-            // drop
-          }
-        }
-        cnedges = k;
-*/
-
         mycxadj[c+1] = cnedges;
 
       } // end current coarse node c
@@ -530,6 +552,8 @@ static void S_par_contract_CLS_quadratic(
 
   dl_free(local_adjncy);
   dl_free(local_adjwgt);
+  dl_free(gadjncy_rot);
+  dl_free(gadjwgt_rot);
   if (dense) {
     dl_free(table);
   } else {
@@ -939,6 +963,8 @@ static void S_par_contract_CLS_random_read(
       if (o == oo && v == ov) {
         // self-loop
         // do nothing
+        // OPTIMIZE: pages do not have to be the same size.........
+        // 可以弄一个超大page，然后后面的指针指向它的偏移就可以了
         adj_type adjstart, adjend;
         adjstart = gxadj[oo][ov], adjend = gxadj[oo][ov+1];
 

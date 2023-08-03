@@ -67,7 +67,7 @@ static bool prefetch_page(struct pagecacher *this, int64_t p, bool force) {
   if (p >= pagecnt)
     return true;
   if (!force && this->resident >= this->capacity)
-    return false; // only returns false when capacity is reached
+    return false; // only returns false when capacity is reached and not forced
   if (this->cached_status[p] == CACHE_FETCHING ||
       this->cached_status[p] == CACHE_SHARED)
     return true;
