@@ -127,30 +127,23 @@ static void S_launch_func(
   /* allocate local output vector */
   dwhere[myid] = pid_alloc(graph->mynvtxs[myid]);
 
+  // NOTE: this code only does refinement phase
+  graph->where = dlthread_get_shmem(sizeof(*dwhere)*nthreads,ctrl->comm);
+  graph->where[myid] = pid_alloc(graph->mynvtxs[myid]);
+
+  for (int i=0;i<graph->mynvtxs[myid];++i) {
+    // where[graph->label[myid][i]] = where[myid][i];
+    graph->where[myid][i] = where[graph->label[myid][i]];
+  }
+
+
   if (myid == 0) {
     dl_stop_timer(&(ctrl->timers.preprocess));
   }
 
   switch (ctrl->ptype) {
-    case MTMETIS_PTYPE_RB:
-      par_partition_rb(ctrl,graph,dwhere);
-      break;
     case MTMETIS_PTYPE_KWAY:
       par_partition_kway(ctrl,graph,dwhere);
-      break;
-    case MTMETIS_PTYPE_ESEP:
-      par_partition_edgeseparator(ctrl,graph,dwhere);
-      break;
-    case MTMETIS_PTYPE_VSEP:
-      if (nthreads > 1) {
-        par_partition_pre(ctrl,graph);
-        /* resize the dwhere allocation to handle the resized graph */
-        dwhere[myid] = pid_realloc(dwhere[myid], graph->mynvtxs[myid]);
-      }
-      par_partition_vertexseparator(ctrl,graph,dwhere);
-      break;
-    case MTMETIS_PTYPE_ND:
-      par_order_nd(ctrl,graph,dwhere);
       break;
     default:
       dl_error("Unknown ptype '%d'",ctrl->ptype);
@@ -226,7 +219,7 @@ double * mtmetis_init_options(void)
 }
 
 
-int mtmetis_partition_explicit(
+int mtmetis_do_whatever_work_explicit(
     vtx_type const nvtxs,
     int ncon,
     adj_type const * const xadj,
@@ -351,142 +344,5 @@ int mtmetis_partition_explicit(
 
   return rv;
 }
-
-
-
-/******************************************************************************
-* METIS REPLACEMENTS **********************************************************
-******************************************************************************/
-
-
-int MTMETIS_PartGraphRecursive(
-    vtx_type const * const nvtxs,
-    vtx_type const * const ncon,
-    adj_type const * const xadj,
-    vtx_type const * const adjncy,
-    wgt_type const * const vwgt,
-    vtx_type const * const vsize,
-    wgt_type const * const adjwgt,
-    pid_type const * const nparts,
-    real_type const * const tpwgts,
-    real_type const * const ubvec,
-    double const * const options,
-    wgt_type * const r_edgecut,
-    pid_type * const where)
-{
-  int rv;
-  double * modopts;
-
-  modopts = double_duplicate(options,MTMETIS_NOPTIONS);
-
-  modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_RB;
-  modopts[MTMETIS_OPTION_NPARTS] = *nparts;
-
-  rv = mtmetis_partition_explicit(*nvtxs,*ncon,xadj,adjncy,0,vwgt,adjwgt,modopts, \
-      where,r_edgecut);
-
-  dl_free(modopts);
-
-  return rv;
-}
-
-
-int MTMETIS_PartGraphKway(
-    vtx_type const * const nvtxs,
-    vtx_type const * const ncon,
-    adj_type const * const xadj,
-    vtx_type const * const adjncy,
-    wgt_type const * const vwgt,
-    vtx_type const * const vsize,
-    wgt_type const * const adjwgt,
-    pid_type const * const nparts,
-    real_type const * const tpwgts,
-    real_type const * const ubvec,
-    double const * const options,
-    wgt_type * const r_edgecut,
-    pid_type * const where)
-{
-  int rv;
-  double * modopts;
-
-  modopts = double_duplicate(options,MTMETIS_NOPTIONS);
-
-  modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_KWAY;
-  modopts[MTMETIS_OPTION_NPARTS] = *nparts;
-
-  rv = mtmetis_partition_explicit(*nvtxs,*ncon,xadj,adjncy,0,vwgt,adjwgt,modopts, \
-      where,r_edgecut);
-
-  dl_free(modopts);
-
-  return rv;
-}
-
-
-int MTMETIS_NodeND(
-    vtx_type const * const nvtxs,
-    adj_type const * const xadj,
-    vtx_type const * const adjncy,
-    wgt_type const * const vwgt,
-    double const * const options,
-    pid_type * const perm,
-    pid_type * const iperm)
-{
-  int rv;
-  double * modopts;
-  vtx_type i;
-
-  if (!iperm) {
-    return MTMETIS_ERROR_INVALIDINPUT;
-  }
-
-  modopts = double_duplicate(options,MTMETIS_NOPTIONS);
-  
-  modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_ND;
-  modopts[MTMETIS_OPTION_NPARTS] = 3;
-
-  rv = mtmetis_partition_explicit(*nvtxs,1,xadj,adjncy,0,vwgt,NULL,modopts, \
-      iperm,NULL);
-
-  /* generate the inverse permutation */
-  if (rv == MTMETIS_SUCCESS && perm) {
-    for (i = 0; i < *nvtxs; ++i) {
-      perm[iperm[i]] = i;
-    }
-  }
-
-  dl_free(modopts);
-
-  return rv;
-}
-
-
-int MTMETIS_ComputeVertexSeparator(
-    vtx_type const * const nvtxs,
-    adj_type const * const xadj,
-    vtx_type const * const adjncy,
-    wgt_type const * const vwgt,
-    double const * const options,
-    wgt_type * const sepsize,
-    pid_type * const where)
-{
-  int rv;
-  double * modopts;
-
-  modopts = double_duplicate(options,MTMETIS_NOPTIONS);
-  
-  modopts[MTMETIS_OPTION_PTYPE] = MTMETIS_PTYPE_VSEP;
-  modopts[MTMETIS_OPTION_NPARTS] = 3;
-
-  rv = mtmetis_partition_explicit(*nvtxs,1,xadj,adjncy,0,vwgt,NULL,modopts, \
-      where, sepsize);
-
-  dl_free(modopts);
-
-  return rv;
-}
-
-
-
 
 #endif

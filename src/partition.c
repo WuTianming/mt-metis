@@ -198,96 +198,26 @@ static wgt_type S_par_partition_mlevel(
     ctrl_type * const ctrl,
     graph_type * const graph)
 {
+  /**
+   * this function is heavily trimmed off to only retain the REFINEMENT phase
+  */
+
   wgt_type obj;
   double ratio;
   graph_type * cgraph;
 
-  /* coaresn this level */
-  cgraph = par_coarsen_graph(ctrl,graph);
-  /*
-  [calling chain]
-      par_coarsen_graph(graph)
-        par_contract_graph(graph)
-          par_graph_setup_coarse(graph) -> cgraph_handle
-            graph->coarser = cgraph;
-            returns cgraph;
-  */
+  // par_refine_graph(ctrl,cgraph);
 
-  /* if we reduce total graph size, or just vertices keep going */
-  /* explanation: in the best case, we want either total graph size
-                  or vertex count to be steadily halved */
-  /* failure to cut both in half leads to premature halt */
-  ratio = dl_min(graph_size(cgraph)/(double)(graph_size(graph)), \
-      cgraph->nvtxs/(double)graph->nvtxs);
+  // /* uncoarsen this level */
+  // par_uncoarsen_graph(ctrl, graph);
 
-  if (cgraph->nvtxs <= ctrl->coarsen_to || ratio > ctrl->stopratio) {
-    par_vprintf(ctrl->verbosity,MTMETIS_VERBOSITY_HIGH,"Coarsest graph{%zu} " \
-        "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
-        " exposed edge weight.\n",graph->level,graph->nvtxs, \
-        graph->nedges,graph->tadjwgt);
-    fprintf(stderr,"Coarsest graph{%zu} " \
-        "has %"PF_VTX_T" vertices, %"PF_ADJ_T" edges, and %"PF_TWGT_T \
-        " exposed edge weight.\n",graph->level,graph->nvtxs, \
-        graph->nedges,graph->tadjwgt);
-    
-    dlthread_barrier(graph->comm);
-
-    switch (ctrl->ptype) {
-      case MTMETIS_PTYPE_ND:
-      case MTMETIS_PTYPE_VSEP:
-        par_initpart_vsep(ctrl,cgraph);
-        break;
-      case MTMETIS_PTYPE_ESEP:
-      case MTMETIS_PTYPE_RB:
-      case MTMETIS_PTYPE_KWAY:
-        par_initpart_cut(ctrl,cgraph);
-        break;
-      default:
-        dl_error("Unknown partition type '%d'\n",ctrl->ptype);
-    }
-
-    // par_refine_graph(ctrl,cgraph);
-    par_refine_chunk_graph(ctrl,cgraph);
-  } else {
-    if (ctrl->ondisk) {
-      if (dlthread_get_id(ctrl->comm) == 0)
-        test_func(ctrl, graph);   // TODO clean up
-
-      // a new thread writes the graph onto disk
-      if (dlthread_get_id(ctrl->comm) == 0) {
-        async_dump_to_disk(ctrl, graph);
-      }
-    }
-
-    S_par_partition_mlevel(ctrl,cgraph);
-  }
-
-  if (ctrl->ondisk) {
-    if (dlthread_get_id(ctrl->comm) == 0) {
-      // S_ser_read_from_disk(ctrl, graph);
-      async_read_from_disk(ctrl, graph);
-      if (graph->finer)
-        async_read_from_disk(ctrl, graph->finer);
-      await_read_from_disk(ctrl, graph);
-    }
-    dlthread_barrier(ctrl->comm);
-    if (dlthread_get_id(ctrl->comm) == 0)
-      test_func(ctrl, graph);     // TODO clean up
-    dlthread_barrier(ctrl->comm);
-  }
-
-  /* uncoarsen this level */
-  par_uncoarsen_graph(ctrl, graph);
+///////////////////////// NOTE:
+  par_refine_chunk_graph(ctrl, graph);
+///////////////////////// NOTE:
 
   dlthread_barrier(ctrl->comm);
 
   switch (ctrl->ptype) {
-    case MTMETIS_PTYPE_ND:
-    case MTMETIS_PTYPE_VSEP:
-      obj = graph->minsep;
-      break;
-    case MTMETIS_PTYPE_ESEP:
-    case MTMETIS_PTYPE_RB:
     case MTMETIS_PTYPE_KWAY:
       obj = graph->mincut;
       break;
@@ -476,19 +406,6 @@ static wgt_type S_par_partition(
 
   if (ctrl->removeislands) {
     dl_error("removeislands not implemented with ncon >= 1!\n");
-#if 0
-    if (myid == 0) {
-      dl_start_timer(&ctrl->timers.preprocess);
-    }
-
-    par_graph_removeislands(ctrl,graph);
-
-    pwgts = dlthread_get_shmem(sizeof(wgt_type)*ctrl->nparts,ctrl->comm);
-
-    if (myid == 0) {
-      dl_stop_timer(&ctrl->timers.preprocess);
-    }
-#endif
   }
 
   if (myid == 0) {
@@ -531,33 +448,6 @@ static wgt_type S_par_partition(
       }
     } else {
       switch (ctrl->ptype) {
-        case MTMETIS_PTYPE_RB: /* special case */
-          /* create where */
-          gwhere = dlthread_get_shmem(sizeof(pid_type*)*nthreads,ctrl->comm);
-          gwhere[myid] = pid_alloc(graph->mynvtxs[myid]);
-
-          curobj = S_par_partition_mlevel_rb(ctrl,graph,gwhere,1.0);
-
-          /* compute pwgts */
-          lpwgts = wgt_init_alloc(0,ctrl->nparts * ncon);
-          for (i=0;i<graph->mynvtxs[myid];++i) {
-            for (int j=0; j<ncon; ++j)
-              lpwgts[gwhere[myid][i] * ncon + j] += graph->vwgt[myid][i*ncon+j];
-            // lpwgts[gwhere[myid][i]] += graph->vwgt[myid][i]; 
-          }
-
-          wgt_dlthread_sumareduce(lpwgts,ctrl->nparts * ncon,ctrl->comm);
-
-          /* assign where */
-          if (myid == 0) {
-            graph->where = gwhere;
-            graph->pwgts = lpwgts;
-          } else {
-            dl_free(lpwgts);
-          }
-
-          dlthread_barrier(ctrl->comm);
-          break;
         case MTMETIS_PTYPE_ND:
         case MTMETIS_PTYPE_VSEP:
         case MTMETIS_PTYPE_ESEP:

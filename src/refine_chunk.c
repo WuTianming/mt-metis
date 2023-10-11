@@ -222,14 +222,6 @@ vtx_type par_refine_chunk_graph(
   }
 
   switch (ctrl->ptype) {
-    case MTMETIS_PTYPE_ND:
-    case MTMETIS_PTYPE_VSEP:
-      dl_error("Unsupported partition type '%d' for chunk-based refinement\n",ctrl->ptype);
-      break;
-    case MTMETIS_PTYPE_RB:
-    case MTMETIS_PTYPE_ESEP:
-      dl_error("Unsupported partition type '%d' for chunk-based refinement\n",ctrl->ptype);
-      break;
     case MTMETIS_PTYPE_KWAY:
       if (graph->kwinfo == NULL) {
         // NOTE: kwinfo is empty <==> the graph is the initial partition.

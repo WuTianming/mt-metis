@@ -1,10 +1,9 @@
 /**
  * @file mtmetis_bin.c
  * @brief Main driver function
- * @author Dominique LaSalle <mtmetis@domnet.org>
- * Copyright 2014, Regents of the University of Minnesota
- * @version 1
- * @date 2013-05-20
+ * @date 2023-10-10
+ * 
+ * This version is trimmed down to only do post-partition refinement.
  */
 
 
@@ -46,31 +45,8 @@
 ******************************************************************************/
 
 
-static const cmd_opt_pair_t CTYPE_CHOICES[] = {
-  {MTMETIS_STR_CTYPE_RM,"Random Matching",MTMETIS_CTYPE_RM},
-  {MTMETIS_STR_CTYPE_SHEM,"Sorted Heavy Edge Matching",MTMETIS_CTYPE_SHEM},
-  {MTMETIS_STR_CTYPE_FC,"FirstChoice Grouping",MTMETIS_CTYPE_FC}
-};
-
-
-static const cmd_opt_pair_t CONTYPE_CHOICES[] = {
-  {MTMETIS_STR_CONTYPE_CLS,"Hash-table with linear scanning", \
-      MTMETIS_CONTYPE_CLS},
-  {MTMETIS_STR_CONTYPE_DENSE,"Dense vector",MTMETIS_CONTYPE_DENSE},
-  {MTMETIS_STR_CONTYPE_SORT,"Sort and merge",MTMETIS_CONTYPE_SORT}
-};
-
-
 static const cmd_opt_pair_t RTYPE_CHOICES[] = {
-  {MTMETIS_STR_RTYPE_GREEDY,"Greedy refinement",MTMETIS_RTYPE_GREEDY},
-  {MTMETIS_STR_RTYPE_FM,"FM based serial refinement (pairwise for kway)", \
-      MTMETIS_RTYPE_FM},
-  {MTMETIS_STR_RTYPE_SFM,"Segmented FM based parallel refinement", \
-      MTMETIS_RTYPE_SFM},
-  {MTMETIS_STR_RTYPE_SFG,"Segmented FM plus Greedy parallel refinement", \
-      MTMETIS_RTYPE_SFG},
-  {MTMETIS_STR_RTYPE_HS,"Hill-Scanning refinement", \
-      MTMETIS_RTYPE_HS}
+  {MTMETIS_STR_RTYPE_GREEDY,"Greedy refinement",MTMETIS_RTYPE_GREEDY}
 };
 
 
@@ -119,27 +95,10 @@ static const cmd_opt_pair_t IGNOREWEIGHTS_CHOICES[] = {
 };
 
 
-static const cmd_opt_pair_t SCANTYPE_CHOICES[] = {
-  {MTMETIS_STR_SCANTYPE_SQRT,"Use the square-root of the number of boundary " \
-      "vertices.",MTMETIS_HS_SCAN_SQRT},
-  {MTMETIS_STR_SCANTYPE_1PC,"Use 1% of the number of boundary " \
-      "vertices.",MTMETIS_HS_SCAN_1PC},
-  {MTMETIS_STR_SCANTYPE_5PC,"Use 5% of the number of boundary " \
-      "vertices.",MTMETIS_HS_SCAN_5PC},
-  {MTMETIS_STR_SCANTYPE_25PC,"Use 25% of the number of boundary " \
-      "vertices.",MTMETIS_HS_SCAN_25PC},
-  {MTMETIS_STR_SCANTYPE_FULL,"Do a full-scan, no limit.",MTMETIS_HS_SCAN_FULL},
-};
-
 
 static const cmd_opt_t OPTS[] = {
   {MTMETIS_OPTION_HELP,'h',"help","Display this help page.",CMD_OPT_FLAG, \
       NULL,0},
-  {MTMETIS_OPTION_CTYPE,'c',"ctype","The type of coarsening (default=shem).", \
-      CMD_OPT_CHOICE,CTYPE_CHOICES,S_ARRAY_SIZE(CTYPE_CHOICES)},
-  {MTMETIS_OPTION_CONTYPE,'d',"contype","How to merge adjacency lists " \
-      "during contraction (default=ls).",CMD_OPT_CHOICE,CONTYPE_CHOICES, \
-        S_ARRAY_SIZE(CONTYPE_CHOICES)},
   {MTMETIS_OPTION_RTYPE,'r',"rtype","The type of refinement " \
       "(default=greedy).",CMD_OPT_CHOICE,RTYPE_CHOICES, \
       S_ARRAY_SIZE(RTYPE_CHOICES)},
@@ -200,10 +159,6 @@ static const cmd_opt_t OPTS[] = {
   {MTMETIS_OPTION_HILLSIZE,'H',"hillsize","The limit to use when searching " \
       "for hills (default=16). This only applies to hill climbing " \
       "refinement types.",CMD_OPT_INT,NULL,0},
-  {MTMETIS_OPTION_HS_SCANTYPE,'S',"scantype","The how many hills to scan " \
-      "before terminating (default=sqrt). This only applies to HS " \
-      "refinement.",CMD_OPT_CHOICE, \
-      SCANTYPE_CHOICES,S_ARRAY_SIZE(SCANTYPE_CHOICES)},
   {MTMETIS_OPTION_VERSION,'\0',"version","Display the current version.", \
       CMD_OPT_FLAG,NULL,0}
 };
@@ -513,7 +468,8 @@ int main(
   dl_start_timer(&timer_input);
 
   /* read the input graph */
-  int load_binary = (strstr(input_file, ".graph") == NULL); // binary, if not .graph suffixed
+  // int load_binary = (strstr(input_file, ".graph") == NULL); // binary, if not .graph suffixed
+  int load_binary = 1;
   int is_mmaped = load_binary ? 1 : 0;
 
   if (load_binary) {
@@ -638,17 +594,32 @@ int main(
   vprintf(verbosity,MTMETIS_VERBOSITY_LOW,"Read '%s' with %"PF_VTX_T \
       " vertices and %"PF_ADJ_T" edges.\n",input_file,nvtxs,xadj[nvtxs]/2);
 
-  dl_stop_timer(&timer_input);
+  owhere = pid_alloc(nvtxs);
 
-  if (output_file) {
-    owhere = pid_alloc(nvtxs);
+  // read owhere from accompanying file
+  {
+    char fname[1024];
+    sprintf(fname, "%s_where.txt", input_file);
+    FILE *f = fopen(fname, "r");
+    if (f == NULL) {
+      dl_error("cannot open owhere file: %s\n", fname);
+    }
+    for (i=0;i<nvtxs;++i) {
+      fscanf(f,"%d",owhere+i);
+    }
   }
 
-  if (mtmetis_partition_explicit(nvtxs,ncon,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
+  dl_stop_timer(&timer_input);
+
+  ///////////////////
+
+  if (mtmetis_do_whatever_work_explicit(nvtxs,ncon,xadj,adjncy,is_mmaped,vwgt,adjwgt,options,
       owhere,NULL) != MTMETIS_SUCCESS) {
     rv = 3;
     goto CLEANUP;
   }
+
+  ///////////////////
 
   dl_start_timer(&timer_output);
 

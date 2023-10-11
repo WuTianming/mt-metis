@@ -473,20 +473,6 @@ vtx_type par_refine_graph(
   }
 
   switch (ctrl->ptype) {
-    case MTMETIS_PTYPE_ND:
-    case MTMETIS_PTYPE_VSEP:
-      if (graph->vsinfo == NULL) {
-        S_partparams_vsep(ctrl,graph);
-      }
-      nmoves = par_vseprefine(ctrl,graph,graph->vsinfo+myid);
-      break;
-    case MTMETIS_PTYPE_RB:
-    case MTMETIS_PTYPE_ESEP:
-      if (graph->esinfo == NULL) {
-        S_partparams_esep(ctrl,graph);
-      }
-      nmoves = par_eseprefine(ctrl,graph,graph->esinfo+myid);
-      break;
     case MTMETIS_PTYPE_KWAY:
       if (graph->kwinfo == NULL) {
         S_partparams_kway(ctrl,graph);

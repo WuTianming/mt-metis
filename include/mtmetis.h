@@ -385,7 +385,7 @@ int MTMETIS_ComputeVertexSeparator(
  *
  * @return MTMETIS_SUCCESS unless an error was encountered.
  */
-int mtmetis_partition_explicit(
+int mtmetis_do_whatever_work_explicit(
     mtmetis_vtx_type nvtxs,
     int ncon,
     mtmetis_adj_type const * xadj,

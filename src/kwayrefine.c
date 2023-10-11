@@ -1064,7 +1064,13 @@ static vtx_type S_par_kwayrefine_GREEDY(
   q = vw_pq_create(0,mynvtxs); 
 
   nmoved = 0;
+  int interval = 0;     // constrain greedy refinement to only a interval of nodes
+  // int maxintervals = 8;
+  int maxintervals = 1;
   for (pass=0; pass<niter; pass++) {
+
+for (interval = 0; interval < maxintervals; ++interval) {
+
     mycut = 0;
     for (c=0;c<2;++c) {
       dlthread_barrier(ctrl->comm);
@@ -1074,6 +1080,7 @@ static vtx_type S_par_kwayrefine_GREEDY(
       for (i=0;i<bnd->size;++i) {
         k = vtx_iset_get(i,bnd);
         DL_ASSERT(k < mynvtxs,"Invalid border vertex %"PF_VTX_T,k);
+        if (k % maxintervals != interval) { continue; }   // force stochasticity
         if (nbrinfo[k].nnbrs > 0) {
           /* only insert vertices with external neighbors */
           rgain = (1.0*nbrinfo[k].ed/sqrt(nbrinfo[k].nnbrs)) - nbrinfo[k].id;
@@ -1190,6 +1197,9 @@ static vtx_type S_par_kwayrefine_GREEDY(
     if (myid == 0) {
       graph->mincut -= (mycut/2);
     }
+
+} // end interval
+
   } /* end passes */
 
   nmoved = vtx_dlthread_sumreduce(nmoved,ctrl->comm);
