@@ -11,7 +11,9 @@ make -j8
 
 
 
-输入格式：兼容 xtrapulp 使用的 `.graph` 格式。需要额外附加一个 xtrapulp 切分好的 `.txt` 格式的 partition 文件，并命名为 "`xxxx.graph_where.txt`"，其中 `xxxx.graph` 是输入图文件的名称。这个 partition 文件需要与后面运行命令中的 "partition 数" 一致。
+输入格式：兼容 xtrapulp 使用的 `.graph` 格式。**必须预先处理成无向图，即每条边都要出现正反两次，否则算法不会正确运行。**
+
+需要额外附加一个 xtrapulp 切分好的 `.txt` 格式的 partition 文件，并命名为 "`xxxx.graph_where.txt`"，其中 `xxxx.graph` 是输入图文件的名称。这个 partition 文件需要与后面运行命令中的 "partition 数" 一致。
 
 
 
