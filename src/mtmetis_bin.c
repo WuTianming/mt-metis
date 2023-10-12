@@ -468,8 +468,8 @@ int main(
   dl_start_timer(&timer_input);
 
   /* read the input graph */
-  // int load_binary = (strstr(input_file, ".graph") == NULL); // binary, if not .graph suffixed
-  int load_binary = 1;
+  int load_binary = (strstr(input_file, ".graph") == NULL); // binary, if not .graph suffixed
+  // int load_binary = 1;
   int is_mmaped = load_binary ? 1 : 0;
 
   if (load_binary) {

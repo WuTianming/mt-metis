@@ -212,7 +212,8 @@ static wgt_type S_par_partition_mlevel(
   // par_uncoarsen_graph(ctrl, graph);
 
 ///////////////////////// NOTE:
-  par_refine_chunk_graph(ctrl, graph);
+  // for (int i = 0; i < 4; ++i)
+    par_refine_chunk_graph(ctrl, graph);  // chunk refine 也有改动，并不支持多个 chunk
 ///////////////////////// NOTE:
 
   dlthread_barrier(ctrl->comm);

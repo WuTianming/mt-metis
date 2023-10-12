@@ -7,6 +7,13 @@
  * @date 2013-05-20
  */
 
+/**
+ * 2023.10.11 改动
+ *  删除 chunk 支持（默认单个chunk就没问题）
+ *  保留多约束支持
+ *  增加手动切块支持
+*/
+
 
 
 
@@ -532,20 +539,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
 
   int single_chunk = 1;
   int maxchunkcnt = 1;
-  for (int i = 0; i < dlthread_get_nthreads(ctrl->comm); ++i) {
-    if (graph->chunkcnt[i] > 1) {
-      single_chunk = 0;
-      dl_storemax(maxchunkcnt, graph->chunkcnt[i]);
-    }
-  }
+  int manual_force_division = 1;
 
-  char fin1[1024], fin2[1024];
-  sprintf(fin1, "dump_graph%zu_dadjncy_tid%"PF_TID_T".bin", graph->level, myid);
-  sprintf(fin2, "dump_graph%zu_dadjwgt_tid%"PF_TID_T".bin", graph->level, myid);
-  FILE *adjncy_read = fopen(fin1, "rb");
-  FILE *adjwgt_read = fopen(fin2, "rb");
-  DL_ASSERT(single_chunk || adjncy_read != NULL, "open adjncy file for read");
-  DL_ASSERT(single_chunk || adjwgt_read != NULL, "open adjwgt file for read");
+  FILE *adjncy_read = NULL;
+  FILE *adjwgt_read = NULL;
 
   q = vw_pq_create(0,mynvtxs); 
 
@@ -553,7 +550,10 @@ static vtx_type S_par_kwayrefine_GREEDY(
   vtx_type * cperm = vtx_alloc(maxchunkcnt);
   vtx_incset(cperm, 0, 1, maxchunkcnt);
 
-  for (pass=0; pass<niter; pass++) {
+  int niter_force = 16;
+
+  for (pass=0; pass<niter_force; pass++) {
+    // if (pass >= 10) manual_force_division = 2;
     wgt_type total_improvement_for_all_chunks = 0;
 
     // shuffle chunk order every time
@@ -566,18 +566,18 @@ static vtx_type S_par_kwayrefine_GREEDY(
       int c1 = dl_min(cc,  graph->chunkcnt[myid]),
           c2 = dl_min(cc+1,graph->chunkcnt[myid]);
 
+for (int manual_division = 0; manual_division < manual_force_division; ++manual_division) {
+
       vtx_type cstart = graph->chunkofst[myid][c1],
                cend   = graph->chunkofst[myid][c2];
+
+      vtx_type crange = (cend - cstart) / manual_force_division + 1;
+      vtx_type cpos = cstart + crange * manual_division;
+      cstart = cpos; cend = cpos + crange;
+      cend = dl_min(cend, graph->chunkofst[myid][c2]);
+
       adj_type cadjstart = graph->xadj[myid][cstart],
                cadjend   = graph->xadj[myid][cend];
-
-      // read the edge files from the disk
-      if (!single_chunk) {
-        fseek(adjncy_read, sizeof(vtx_type) * cadjstart, SEEK_SET);
-        fseek(adjwgt_read, sizeof(wgt_type) * cadjstart, SEEK_SET);
-        fread(graph->adjncy[myid], sizeof(vtx_type), cadjend - cadjstart, adjncy_read);
-        fread(graph->adjwgt[myid], sizeof(wgt_type), cadjend - cadjstart, adjwgt_read);
-      }
 
       mycut = 0;
       for (c=0;c<2;++c) {
@@ -801,6 +801,11 @@ static vtx_type S_par_kwayrefine_GREEDY(
       if (myid == 0) {
         graph->mincut -= (mycut/2);
       }
+
+      dlthread_barrier(ctrl->comm);
+
+}
+
     } /* end chunks */
 
     dlthread_barrier(ctrl->comm);
@@ -815,11 +820,6 @@ static vtx_type S_par_kwayrefine_GREEDY(
   } /* end passes */
 
   dl_free(cperm);
-
-  if (!single_chunk) {
-    fclose(adjncy_read);
-    fclose(adjwgt_read);
-  }
 
   nmoved = vtx_dlthread_sumreduce(nmoved,ctrl->comm);
 

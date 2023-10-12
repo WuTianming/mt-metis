@@ -128,8 +128,9 @@ static void S_launch_func(
   dwhere[myid] = pid_alloc(graph->mynvtxs[myid]);
 
   // NOTE: this code only does refinement phase
-  graph->where = dlthread_get_shmem(sizeof(*dwhere)*nthreads,ctrl->comm);
-  graph->where[myid] = pid_alloc(graph->mynvtxs[myid]);
+  par_graph_alloc_partmemory(ctrl, graph);
+  // graph->where = dlthread_get_shmem(sizeof(*dwhere)*nthreads,ctrl->comm);
+  // graph->where[myid] = pid_alloc(graph->mynvtxs[myid]);
 
   for (int i=0;i<graph->mynvtxs[myid];++i) {
     // where[graph->label[myid][i]] = where[myid][i];
