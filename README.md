@@ -1,4 +1,32 @@
-This is a fork of the **m**ulti-**t**hreaded **METIS** partitioning algorithm `mt-metis` by Dominique LaSalle, focused on reducing memory footprint.
+**Efficiently partition billion-scale graphs on a single machine**—even when the graph exceeds main memory capacity—using our optimized out-of-core algorithm.
+
+This is a fork of the **m**ulti-**t**hreaded **METIS** partitioning algorithm `mt-metis` by Dominique LaSalle.
+
+
+## Evaluation Results
+
+Memory consumption (GB):
+
+| dataset         | baseline | ours (-K100) | ours (-K400) |
+| --------------- | -------- | ------------ | ------------ |
+| ogbn-products   | 7.4      | 5.3          | /            |
+| ogbn-papers100M | 232.4    | 44.7         | /            |
+| 400M            | **OOM**      | 108.7        | 178.3        |
+
+Running time:
+
+| dataset         | baseline  | ours (-K100) | ours (-K400) |
+| --------------- | --------- | ------------ | ------------ |
+| ogbn-products   | 51s       | 14.7s        | /            |
+| ogbn-papers100M | 37m       | 34m21s       | /            |
+| 400M            | **OOM** | 2h16m        | 1h27m        |
+
+
+Note: "**400M**" is an artificial dataset obtained from augmenting the Papers100M dataset. For the "**400M**" dataset, two configurations are tested:
+
+- `-K100`: the chunk size is set to 100 mega-edges. This splits the 400M dataset into 11 chunks per thread, achieving a lower memory footprint.
+- `-K400`: the chunk size is set to 400 mega-edges. This keeps more edges in memory than the `-K100` configuration, making execution faster while using more memory.
+
 
 
 
@@ -104,33 +132,3 @@ Make sure to put the input data in the current working directory, then run the b
 Edit `testbench/launch_mtmetis.sh` to change `TMPDIR`,`LOGDIR` and `MTMETIS` path. Edit `testbench/experiment_mtmetis.sh` to set the location of the datasets.
 
 Then run `testbench/experiment_mtmetis.sh` to launch the benchmark.
-
-
-
-## Results
-
-For the 400M dataset, two configurations are tested:
-
-- `-K100`: the chunk size is set to 100 mega-edges. This splits the 400M dataset into 11 chunks per thread, achieving a lower memory footprint.
-- `-K400`: the chunk size is set to 400 mega-edges. This keeps more edges in memory than the `-K100` configuration, making execution faster while using more memory.
-
-
-
-The results are shown below:
-
-Memory consumption (GB):
-
-| dataset         | baseline | ours (-K100) | ours (-K400) |
-| --------------- | -------- | ------------ | ------------ |
-| ogbn-products   | 7.4      | 5.3          | /            |
-| ogbn-papers100M | 232.4    | 44.7         | /            |
-| 400M            | OOM      | 108.7        | 178.3        |
-
-Running time:
-
-| dataset         | baseline  | ours (-K100) | ours (-K400) |
-| --------------- | --------- | ------------ | ------------ |
-| ogbn-products   | 51s       | 14.7s        | /            |
-| ogbn-papers100M | 37m       | 34m21s       | /            |
-| 400M            | N/A (OOM) | 2h16m        | 1h27m        |
-
