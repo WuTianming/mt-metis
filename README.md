@@ -5,6 +5,8 @@ This is a fork of the **m**ulti-**t**hreaded **METIS** partitioning algorithm `m
 
 ## Evaluation Results
 
+The algorithm can finish partitioning the graph **faster** and under **constrained memory**, compared to baseline solutions such as **ParMETIS**.
+
 Memory consumption (GB):
 
 | dataset         | baseline | ours (-K100) | ours (-K400) |
